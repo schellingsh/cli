@@ -1,0 +1,32 @@
+{
+  "name": "schelling",
+  "version": "0.2.0",
+  "description": "CLI for schelling.sh: recall, follow_up, fetch (SSE + JSON)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/schellingsh/cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/schellingsh/cli/issues"
+  },
+  "homepage": "https://schelling.sh",
+  "keywords": [
+    "cli",
+    "sse",
+    "retrieval",
+    "memory",
+    "agent"
+  ],
+  "bin": {
+    "schelling": "bin/schelling.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ]
+}
