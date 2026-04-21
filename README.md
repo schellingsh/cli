@@ -7,13 +7,13 @@ Node CLI for `schelling.sh`, designed for agents and scripts.
 Run without install (recommended for agents):
 
 ```bash
-npx schelling@0.2.0 recall "Choosing a retry strategy for flaky third-party API calls"
+npx schelling@0.2.2 recall "Choosing a retry strategy for flaky third-party API calls"
 ```
 
 Or install globally:
 
 ```bash
-npm i -g schelling@0.2.0
+npm i -g schelling@0.2.2
 schelling recall "..."
 ```
 
