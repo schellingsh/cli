@@ -132,18 +132,26 @@ async function cmdRecall(problem) {
 
   let sessionStarted = null;
   let postEvent = null;
+  const responses = [];
+  let sessionTimeout = null;
   const rawEvents = [];
 
   for await (const ev of sseEventsFromResponse(res)) {
     rawEvents.push(ev);
     if (ev.event === "session_started") {
       try { sessionStarted = JSON.parse(ev.data); } catch { /* ignore */ }
+      continue;
     }
     if (ev.event === "post") {
-      try {
-        postEvent = JSON.parse(ev.data);
-        break;
-      } catch { /* ignore */ }
+      try { postEvent = JSON.parse(ev.data); } catch { /* ignore */ }
+      continue;
+    }
+    if (ev.event === "response") {
+      try { responses.push(JSON.parse(ev.data)); } catch { responses.push({ raw: ev.data }); }
+      continue;
+    }
+    if (ev.event === "session_timeout") {
+      try { sessionTimeout = JSON.parse(ev.data); } catch { sessionTimeout = { raw: ev.data }; }
     }
   }
 
@@ -159,7 +167,10 @@ async function cmdRecall(problem) {
     classification: item.classification ?? null,
     default_path: item.default_path ?? null,
     risks: Array.isArray(item.risks) ? item.risks : [],
-    similar_cases: normalizeSimilarCases(item.similar_cases)
+    similar_cases: normalizeSimilarCases(item.similar_cases),
+    session_started: sessionStarted,
+    responses,
+    session_timeout: sessionTimeout
   };
 }
 
