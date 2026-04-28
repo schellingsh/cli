@@ -3,6 +3,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 
 function readOwnVersion() {
   try {
@@ -24,9 +25,11 @@ function usage(exitCode = 0) {
     '  schelling recall "<problem statement>"',
     '  schelling follow_up "<cid>" "<learning>"',
     '  schelling fetch "<cid>"',
+    "  schelling setup [--cwd <path>]",
     "",
     "Env:",
     `  SCHELLING_API_BASE   Override API base URL (default: ${DEFAULT_API_BASE})`,
+    `  SCHELLING_SKILL_URL  Override SKILL.md source URL used by \`setup\``,
     "",
     "Output:",
     "  JSON to stdout. Errors go to stderr and exit non-zero."
@@ -214,6 +217,179 @@ async function cmdFetch(cid) {
   return { kind: "fetch", cid, record: data };
 }
 
+function findGitRoot(startDir) {
+  let dir = path.resolve(startDir);
+  // Walk up until we find a .git directory or hit the filesystem root.
+  while (true) {
+    if (fs.existsSync(path.join(dir, ".git"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+function parseGitHubRemote(remoteUrl) {
+  if (!remoteUrl) return null;
+
+  // Supported forms:
+  //   git@github.com:owner/repo(.git)
+  //   https://github.com/owner/repo(.git)
+  //   ssh://git@github.com/owner/repo(.git)
+  //   github.com/owner/repo
+  const sshMatch = remoteUrl.match(/^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i);
+  if (sshMatch) return { host: "github.com", owner: sshMatch[1], name: sshMatch[2] };
+
+  const urlMatch = remoteUrl.match(
+    /^(?:https?:\/\/|ssh:\/\/git@|git:\/\/)?(?:[^@]+@)?github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?\/?$/i
+  );
+  if (urlMatch) return { host: "github.com", owner: urlMatch[1], name: urlMatch[2] };
+
+  return null;
+}
+
+function gitRemotesAll(repoRoot) {
+  try {
+    return execFileSync("git", ["-C", repoRoot, "remote", "-v"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+  } catch {
+    return "";
+  }
+}
+
+function pickGitHubRepo(remotesOutput) {
+  // `git remote -v` looks like:
+  //   origin   git@github.com:foo/bar.git (fetch)
+  //   origin   git@github.com:foo/bar.git (push)
+  //   upstream https://github.com/up/bar.git (fetch)
+  // Prefer `origin`; fall back to the first GitHub remote we see.
+  let originMatch = null;
+  let firstGithub = null;
+
+  for (const line of remotesOutput.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const m = line.match(/^(\S+)\s+(\S+)\s+\((?:fetch|push)\)\s*$/);
+    if (!m) continue;
+    const [, name, url] = m;
+    const repo = parseGitHubRemote(url);
+    if (!repo) continue;
+    if (name === "origin" && !originMatch) originMatch = { ...repo, remoteName: name, remoteUrl: url };
+    if (!firstGithub) firstGithub = { ...repo, remoteName: name, remoteUrl: url };
+  }
+
+  return originMatch || firstGithub || null;
+}
+
+const SKILL_RELATIVE = path.join(".agents", "skills", "schelling", "SKILL.md");
+const PROJECT_ID_RELATIVE = path.join(".schelling", "project-id");
+const DEFAULT_SKILL_URL = "https://raw.githubusercontent.com/schellingsh/cli/HEAD/SKILL.md";
+
+function getSkillUrl() {
+  return process.env.SCHELLING_SKILL_URL || DEFAULT_SKILL_URL;
+}
+
+async function downloadSkill(url) {
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: {
+        "accept": "text/markdown, text/plain;q=0.9, */*;q=0.8",
+        "user-agent": userAgent()
+      }
+    });
+  } catch (err) {
+    throw userError(`Could not download SKILL.md from ${url}: ${err && err.message ? err.message : err}`);
+  }
+  if (!res.ok) {
+    throw userError(`Could not download SKILL.md from ${url}: HTTP ${res.status} ${res.statusText}`);
+  }
+  return res.text();
+}
+
+function writeIfChanged(filePath, nextContent) {
+  if (fs.existsSync(filePath)) {
+    const current = fs.readFileSync(filePath, "utf8");
+    if (current === nextContent) return { path: filePath, changed: false, action: "unchanged" };
+    fs.writeFileSync(filePath, nextContent, "utf8");
+    return { path: filePath, changed: true, action: "updated" };
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, nextContent, "utf8");
+  return { path: filePath, changed: true, action: "created" };
+}
+
+function userError(message) {
+  const e = new Error(message);
+  e.userFacing = true;
+  return e;
+}
+
+function parseSetupArgs(args) {
+  const opts = { cwd: process.cwd() };
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === "--cwd") {
+      const v = args[i + 1];
+      if (!v) throw userError("`--cwd` requires a path argument.");
+      opts.cwd = v;
+      i += 1;
+    } else if (a.startsWith("--cwd=")) {
+      opts.cwd = a.slice("--cwd=".length);
+    } else {
+      throw userError(`Unknown argument for \`setup\`: ${a}`);
+    }
+  }
+  return opts;
+}
+
+async function cmdSetup(args) {
+  const opts = parseSetupArgs(args);
+
+  const repoRoot = findGitRoot(opts.cwd);
+  if (!repoRoot) {
+    throw userError(
+      "Not inside a git repository. Run `schelling setup` from the root of a git-tracked project."
+    );
+  }
+
+  const remotes = gitRemotesAll(repoRoot);
+  const repo = pickGitHubRepo(remotes);
+  if (!repo) {
+    throw userError(
+      `Could not find a github.com remote in \`git remote -v\` for ${repoRoot}.\n` +
+        "Add one with e.g. `git remote add origin git@github.com:<owner>/<repo>.git` and re-run `schelling setup`."
+    );
+  }
+
+  const projectId = `${repo.owner}/${repo.name}`;
+  const skillUrl = getSkillUrl();
+  const skillBody = await downloadSkill(skillUrl);
+
+  const skillAbs = path.join(repoRoot, SKILL_RELATIVE);
+  const projectIdAbs = path.join(repoRoot, PROJECT_ID_RELATIVE);
+
+  const files = [
+    { ...writeIfChanged(skillAbs, skillBody), relpath: SKILL_RELATIVE },
+    { ...writeIfChanged(projectIdAbs, `${projectId}\n`), relpath: PROJECT_ID_RELATIVE }
+  ];
+
+  const lines = [`Detected project: ${projectId} (from ${repo.remoteName} ${repo.remoteUrl})`, ""];
+  for (const f of files) {
+    const verb =
+      f.action === "created" ? "Created  " :
+      f.action === "updated" ? "Updated  " :
+      "Unchanged";
+    lines.push(`  ${verb} ${f.relpath}`);
+  }
+  if (files.some((f) => f.changed)) {
+    lines.push("");
+    lines.push("Add, commit, and push these files following your repo's normal contribution policy.");
+  }
+
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const cmd = args[0];
@@ -246,9 +422,17 @@ async function main() {
       return;
     }
 
+    if (cmd === "setup") {
+      // `setup` is human-run, not piped. It writes a plain-text success
+      // message directly to stdout instead of JSON like the other commands.
+      await cmdSetup(args.slice(1));
+      return;
+    }
+
     usage(1);
   } catch (err) {
-    fail(err && err.stack ? err.stack : String(err));
+    if (err && err.userFacing) fail(err.message);
+    else fail(err && err.stack ? err.stack : String(err));
   }
 }
 
