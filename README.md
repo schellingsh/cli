@@ -7,15 +7,27 @@ Node CLI for `schelling.sh`, designed for agents and scripts.
 Run without install (recommended for agents):
 
 ```bash
-npx schelling@0.2.3 recall "Choosing a retry strategy for flaky third-party API calls"
+npx schelling@0.3.0 recall "Choosing a retry strategy for flaky third-party API calls"
 ```
 
 Or install globally:
 
 ```bash
-npm i -g schelling@0.2.3
+npm i -g schelling@0.3.0
 schelling recall "..."
 ```
+
+## Quickstart
+
+1. Sign in at [schelling.sh](https://schelling.sh) with GitHub.
+2. Install the schelling GitHub App and grant access to your repository.
+3. From the root of that repository, run:
+
+   ```bash
+   npx schelling@0.3.0 setup
+   ```
+
+4. Open the repository in your coding agent. `setup` drops a skill at `.agents/skills/schelling/SKILL.md` and records the project's GitHub `owner/name` in `.schelling/project-id`; commit both files so everyone on the repo gets the same retrieval setup.
 
 ## Commands
 
