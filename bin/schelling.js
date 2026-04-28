@@ -218,13 +218,20 @@ async function cmdFetch(cid) {
 }
 
 function findGitRoot(startDir) {
-  let dir = path.resolve(startDir);
-  // Walk up until we find a .git directory or hit the filesystem root.
-  while (true) {
-    if (fs.existsSync(path.join(dir, ".git"))) return dir;
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
+  // Ask git itself rather than walking the tree: this handles subdirs,
+  // worktrees, and submodules correctly, and matches whatever git on the
+  // user's machine considers the repo root.
+  try {
+    const out = execFileSync(
+      "git",
+      ["-C", startDir, "rev-parse", "--is-inside-work-tree", "--show-toplevel"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+    );
+    const lines = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    if (lines[0] !== "true") return null;
+    return lines[1] || null;
+  } catch {
+    return null;
   }
 }
 
@@ -283,7 +290,8 @@ function pickGitHubRepo(remotesOutput) {
 
 const SKILL_RELATIVE = path.join(".agents", "skills", "schelling", "SKILL.md");
 const PROJECT_ID_RELATIVE = path.join(".schelling", "project-id");
-const DEFAULT_SKILL_URL = "https://raw.githubusercontent.com/schellingsh/cli/HEAD/SKILL.md";
+const DEFAULT_SKILL_URL =
+  "https://raw.githubusercontent.com/schellingsh/skill/refs/heads/main/.agents/skills/schelling/SKILL.md";
 
 function getSkillUrl() {
   return process.env.SCHELLING_SKILL_URL || DEFAULT_SKILL_URL;
@@ -349,7 +357,7 @@ async function cmdSetup(args) {
   const repoRoot = findGitRoot(opts.cwd);
   if (!repoRoot) {
     throw userError(
-      "Not inside a git repository. Run `schelling setup` from the root of a git-tracked project."
+      "Not inside a git work tree. Run `schelling setup` from somewhere inside a git-tracked project."
     );
   }
 
