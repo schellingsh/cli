@@ -118,6 +118,11 @@ function normalizeSimilarCases(similarCases) {
 
 async function cmdRecall(problem) {
   const apiBase = getApiBase();
+  const projectId = getProjectId(process.cwd());
+
+  const requestBody = { problems: [problem] };
+  if (projectId) requestBody.project_id = projectId;
+
   const res = await fetch(`${apiBase}/post_many`, {
     method: "POST",
     headers: {
@@ -125,7 +130,7 @@ async function cmdRecall(problem) {
       "content-type": "application/json",
       "user-agent": userAgent()
     },
-    body: JSON.stringify({ problems: [problem] })
+    body: JSON.stringify(requestBody)
   });
 
   if (!res.ok) {
@@ -166,6 +171,7 @@ async function cmdRecall(problem) {
   return {
     kind: "recall",
     problem,
+    project_id: projectId,
     cid: item.cid || null,
     classification: item.classification ?? null,
     default_path: item.default_path ?? null,
@@ -292,6 +298,18 @@ const SKILL_RELATIVE = path.join(".agents", "skills", "schelling", "SKILL.md");
 const PROJECT_ID_RELATIVE = path.join(".schelling", "project-id");
 const DEFAULT_SKILL_URL =
   "https://raw.githubusercontent.com/schellingsh/skill/refs/heads/main/.agents/skills/schelling/SKILL.md";
+
+function getProjectId(startDir) {
+  const repoRoot = findGitRoot(startDir);
+  if (!repoRoot) return null;
+  try {
+    const raw = fs.readFileSync(path.join(repoRoot, PROJECT_ID_RELATIVE), "utf8");
+    const id = raw.split(/\r?\n/).map((s) => s.trim()).find((s) => s.length > 0);
+    return id || null;
+  } catch {
+    return null;
+  }
+}
 
 function getSkillUrl() {
   return process.env.SCHELLING_SKILL_URL || DEFAULT_SKILL_URL;
