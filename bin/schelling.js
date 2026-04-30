@@ -185,7 +185,11 @@ async function cmdRecall(problem) {
 
 async function cmdFollowUp(cid, learning) {
   const apiBase = getApiBase();
-  const res = await fetch(`${apiBase}/follow_up/${encodeURIComponent(cid)}`, {
+  const projectId = getProjectId(process.cwd());
+  const url = new URL(`${apiBase}/follow_up/${encodeURIComponent(cid)}`);
+  if (projectId) url.searchParams.set("project_id", projectId);
+
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -201,12 +205,16 @@ async function cmdFollowUp(cid, learning) {
   let data;
   try { data = JSON.parse(text); } catch { data = { raw: text }; }
 
-  return { kind: "follow_up", cid, learning, response: data };
+  return { kind: "follow_up", project_id: projectId, cid, learning, response: data };
 }
 
 async function cmdFetch(cid) {
   const apiBase = getApiBase();
-  const res = await fetch(`${apiBase}/fetch/${encodeURIComponent(cid)}`, {
+  const projectId = getProjectId(process.cwd());
+  const url = new URL(`${apiBase}/fetch/${encodeURIComponent(cid)}`);
+  if (projectId) url.searchParams.set("project_id", projectId);
+
+  const res = await fetch(url, {
     method: "GET",
     headers: {
       "accept": "application/json",
@@ -220,7 +228,7 @@ async function cmdFetch(cid) {
   let data;
   try { data = JSON.parse(text); } catch { data = { raw: text }; }
 
-  return { kind: "fetch", cid, record: data };
+  return { kind: "fetch", project_id: projectId, cid, record: data };
 }
 
 function findGitRoot(startDir) {
