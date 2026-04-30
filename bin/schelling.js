@@ -98,6 +98,106 @@ async function* sseEventsFromResponse(res) {
   if (final) yield parseSseEventBlock(final);
 }
 
+function normalizeSimilarCases(similarCases) {
+  if (!Array.isArray(similarCases)) return [];
+
+  return similarCases
+    .map((sc) => {
+      if (typeof sc === "string") return { cid: sc, hint: null, problem: null };
+      if (sc && typeof sc === "object") {
+        return {
+          cid: sc.cid || sc.id || null,
+          hint: sc.hint || sc.relevance || sc.reason || null,
+          problem: sc.problem || sc.title || sc.text || null
+        };
+      }
+      return null;
+    })
+    .filter((x) => x && x.cid);
+}
+
+function sessionIdFromStarted(sessionStarted) {
+  if (!sessionStarted || typeof sessionStarted !== "object") return null;
+  const sid =
+    sessionStarted.session_id ??
+    sessionStarted.sessionId ??
+    sessionStarted.id ??
+    null;
+  return typeof sid === "string" && sid.trim() ? sid.trim() : null;
+}
+
+/** Collect nested `cid` string fields (typical shape from API payloads). */
+function walkCollectCids(value, out, depth = 0) {
+  if (depth > 12 || value === null || value === undefined) return;
+  if (typeof value === "string") return;
+  if (Array.isArray(value)) {
+    for (const el of value) walkCollectCids(el, out, depth + 1);
+    return;
+  }
+  if (typeof value !== "object") return;
+  for (const [k, v] of Object.entries(value)) {
+    if (k === "cid" && typeof v === "string" && v.trim()) out.push(v.trim());
+    else if (
+      (k === "cids" || k === "matched_cids" || k === "response_cids") &&
+      Array.isArray(v)
+    ) {
+      for (const el of v) {
+        if (typeof el === "string" && el.trim()) out.push(el.trim());
+        else walkCollectCids(el, out, depth + 1);
+      }
+    } else walkCollectCids(v, out, depth + 1);
+  }
+}
+
+function orderedUniqueCids(cids) {
+  const seen = new Set();
+  const out = [];
+  for (const c of cids) {
+    if (!c || seen.has(c)) continue;
+    seen.add(c);
+    out.push(c);
+  }
+  return out;
+}
+
+function matchedCidsFromRecall(similarCasesNorm, responses) {
+  const ordered = [];
+  for (const sc of similarCasesNorm) ordered.push(sc.cid);
+  if (Array.isArray(responses)) {
+    for (const r of responses) walkCollectCids(r, ordered);
+  }
+  return orderedUniqueCids(ordered);
+}
+
+async function apiFetchRecord(apiBase, cid, projectId) {
+  const url = new URL(`${apiBase}/fetch/${encodeURIComponent(cid)}`);
+  if (projectId) url.searchParams.set("project_id", projectId);
+
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      "accept": "application/json",
+      "user-agent": userAgent()
+    }
+  });
+
+  const text = await res.text();
+  if (!res.ok) {
+    const snippet = text ? `: ${text.slice(0, 500)}${text.length > 500 ? "…" : ""}` : "";
+    return {
+      cid,
+      fetch_error: `HTTP ${res.status} ${res.statusText}${snippet}`
+    };
+  }
+  let record;
+  try {
+    record = JSON.parse(text);
+  } catch {
+    record = { raw: text };
+  }
+  return { cid, record };
+}
+
 async function cmdRecall(problem) {
   const apiBase = getApiBase();
   const projectId = getProjectId(process.cwd());
@@ -150,11 +250,27 @@ async function cmdRecall(problem) {
   }
 
   const item = postEvent.items[0] || {};
+  const similar_cases = normalizeSimilarCases(item.similar_cases);
+  const matched_cids = matchedCidsFromRecall(similar_cases, responses);
+  const session_id = sessionIdFromStarted(sessionStarted);
+
+  const fetched_contents =
+    matched_cids.length === 0 ?
+      [] :
+      await Promise.all(matched_cids.map((cid) => apiFetchRecord(apiBase, cid, projectId)));
+
   return {
     kind: "recall",
+    session_id,
     problem,
     project_id: projectId,
     cid: item.cid || null,
+    classification: item.classification ?? null,
+    default_path: item.default_path ?? null,
+    risks: Array.isArray(item.risks) ? item.risks : [],
+    similar_cases,
+    matched_cids,
+    fetched_contents,
     session_started: sessionStarted,
     responses,
     session_timeout: sessionTimeout
@@ -189,24 +305,9 @@ async function cmdFollowUp(cid, learning) {
 async function cmdFetch(cid) {
   const apiBase = getApiBase();
   const projectId = getProjectId(process.cwd());
-  const url = new URL(`${apiBase}/fetch/${encodeURIComponent(cid)}`);
-  if (projectId) url.searchParams.set("project_id", projectId);
-
-  const res = await fetch(url, {
-    method: "GET",
-    headers: {
-      "accept": "application/json",
-      "user-agent": userAgent()
-    }
-  });
-
-  const text = await res.text();
-  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}${text ? `\n${text}` : ""}`);
-
-  let data;
-  try { data = JSON.parse(text); } catch { data = { raw: text }; }
-
-  return { kind: "fetch", project_id: projectId, cid, record: data };
+  const got = await apiFetchRecord(apiBase, cid, projectId);
+  if (got.fetch_error) throw new Error(got.fetch_error);
+  return { kind: "fetch", project_id: projectId, cid: got.cid, record: got.record };
 }
 
 function findGitRoot(startDir) {
