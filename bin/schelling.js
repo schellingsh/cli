@@ -146,7 +146,6 @@ async function cmdRecall(problem) {
     kind: "recall",
     problem,
     cid: item.cid || null,
-    risks: Array.isArray(item.risks) ? item.risks : [],
     session_started: sessionStarted,
     responses,
     session_timeout: sessionTimeout
