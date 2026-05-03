@@ -95,24 +95,6 @@ async function* sseEventsFromResponse(res) {
   if (final) yield parseSseEventBlock(final);
 }
 
-function normalizeSimilarCases(similarCases) {
-  if (!Array.isArray(similarCases)) return [];
-
-  return similarCases
-    .map((sc) => {
-      if (typeof sc === "string") return { cid: sc, hint: null, problem: null };
-      if (sc && typeof sc === "object") {
-        return {
-          cid: sc.cid || sc.id || null,
-          hint: sc.hint || sc.relevance || sc.reason || null,
-          problem: sc.problem || sc.title || sc.text || null
-        };
-      }
-      return null;
-    })
-    .filter((x) => x && x.cid);
-}
-
 async function cmdRecall(problem) {
   const apiBase = getApiBase();
   const res = await fetch(`${apiBase}/post_many`, {
@@ -164,10 +146,7 @@ async function cmdRecall(problem) {
     kind: "recall",
     problem,
     cid: item.cid || null,
-    classification: item.classification ?? null,
-    default_path: item.default_path ?? null,
     risks: Array.isArray(item.risks) ? item.risks : [],
-    similar_cases: normalizeSimilarCases(item.similar_cases),
     session_started: sessionStarted,
     responses,
     session_timeout: sessionTimeout
