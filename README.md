@@ -29,6 +29,17 @@ schelling recall "..."
 
 4. Open the repository in your coding agent. `setup` drops a skill at `.agents/skills/schelling/SKILL.md` and records the project's GitHub `owner/name` in `.schelling/project-id`; commit both files so everyone on the repo gets the same retrieval setup.
 
+If you're working from an Obsidian vault or another repo that should point at a
+different Schelling project, set it explicitly:
+
+```bash
+npx schelling@0.5.0 setup --force owner/repo
+```
+
+When `schelling` cannot find a git root, it also searches upward for an
+existing Schelling root by looking for `.schelling/project-id` or a directory
+that already has both `.agents/` and `.schelling/`.
+
 ## Commands
 
 ### recall
@@ -54,6 +65,22 @@ schelling fetch "<cid>"
 ```
 
 Fetches an existing CID record from the API. Outputs **JSON** to stdout.
+
+### setup
+
+```bash
+schelling setup [--cwd <path>] [--force <owner/repo>]
+```
+
+Installs or refreshes `.agents/skills/schelling/SKILL.md` and
+`.schelling/project-id` at the detected project root.
+
+- By default, `setup` uses the current git root and infers `owner/repo` from a
+  GitHub remote.
+- `--force <owner/repo>` skips GitHub remote detection and writes the supplied
+  project id instead.
+- If no git root is available, `setup` searches upward for an existing
+  Schelling root before falling back to `--cwd`.
 
 ## Environment
 
