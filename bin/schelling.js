@@ -98,24 +98,6 @@ async function* sseEventsFromResponse(res) {
   if (final) yield parseSseEventBlock(final);
 }
 
-function normalizeSimilarCases(similarCases) {
-  if (!Array.isArray(similarCases)) return [];
-
-  return similarCases
-    .map((sc) => {
-      if (typeof sc === "string") return { cid: sc, hint: null, problem: null };
-      if (sc && typeof sc === "object") {
-        return {
-          cid: sc.cid || sc.id || null,
-          hint: sc.hint || sc.relevance || sc.reason || null,
-          problem: sc.problem || sc.title || sc.text || null
-        };
-      }
-      return null;
-    })
-    .filter((x) => x && x.cid);
-}
-
 function sessionIdFromStarted(sessionStarted) {
   if (!sessionStarted || typeof sessionStarted !== "object") return null;
   const sid =
@@ -126,45 +108,25 @@ function sessionIdFromStarted(sessionStarted) {
   return typeof sid === "string" && sid.trim() ? sid.trim() : null;
 }
 
-/** Collect nested `cid` string fields (typical shape from API payloads). */
-function walkCollectCids(value, out, depth = 0) {
-  if (depth > 12 || value === null || value === undefined) return;
-  if (typeof value === "string") return;
-  if (Array.isArray(value)) {
-    for (const el of value) walkCollectCids(el, out, depth + 1);
-    return;
-  }
-  if (typeof value !== "object") return;
-  for (const [k, v] of Object.entries(value)) {
-    if (k === "cid" && typeof v === "string" && v.trim()) out.push(v.trim());
-    else if (
-      (k === "cids" || k === "matched_cids" || k === "response_cids") &&
-      Array.isArray(v)
-    ) {
-      for (const el of v) {
-        if (typeof el === "string" && el.trim()) out.push(el.trim());
-        else walkCollectCids(el, out, depth + 1);
-      }
-    } else walkCollectCids(v, out, depth + 1);
-  }
-}
-
 function orderedUniqueCids(cids) {
   const seen = new Set();
   const out = [];
   for (const c of cids) {
-    if (!c || seen.has(c)) continue;
-    seen.add(c);
-    out.push(c);
+    const cid = typeof c === "string" ? c.trim() : "";
+    if (!cid || seen.has(cid)) continue;
+    seen.add(cid);
+    out.push(cid);
   }
   return out;
 }
 
-function matchedCidsFromRecall(similarCasesNorm, responses) {
+function matchedCidsFromRecall(responses) {
   const ordered = [];
-  for (const sc of similarCasesNorm) ordered.push(sc.cid);
   if (Array.isArray(responses)) {
-    for (const r of responses) walkCollectCids(r, ordered);
+    for (const r of responses) {
+      if (!r || typeof r !== "object" || !Array.isArray(r.cids)) continue;
+      for (const cid of r.cids) ordered.push(cid);
+    }
   }
   return orderedUniqueCids(ordered);
 }
@@ -250,8 +212,7 @@ async function cmdRecall(problem) {
   }
 
   const item = postEvent.items[0] || {};
-  const similar_cases = normalizeSimilarCases(item.similar_cases);
-  const matched_cids = matchedCidsFromRecall(similar_cases, responses);
+  const matched_cids = matchedCidsFromRecall(responses);
   const session_id = sessionIdFromStarted(sessionStarted);
 
   const fetched_contents =
@@ -268,7 +229,6 @@ async function cmdRecall(problem) {
     classification: item.classification ?? null,
     default_path: item.default_path ?? null,
     risks: Array.isArray(item.risks) ? item.risks : [],
-    similar_cases,
     matched_cids,
     fetched_contents,
     session_started: sessionStarted,
