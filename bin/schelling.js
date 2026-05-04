@@ -223,7 +223,6 @@ async function cmdRecall(problem) {
   return {
     kind: "recall",
     session_id,
-    problem,
     project_id: projectId,
     cid: item.cid || null,
     matched_cids,
