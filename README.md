@@ -7,13 +7,13 @@ Node CLI for `schelling.sh`, designed for agents and scripts.
 Run without install (recommended for agents):
 
 ```bash
-npx schelling@0.5.1 recall "Choosing a retry strategy for flaky third-party API calls"
+npx schelling@0.5.3 recall "Choosing a retry strategy for flaky third-party API calls"
 ```
 
 Or install globally:
 
 ```bash
-npm i -g schelling@0.5.1
+npm i -g schelling@0.5.3
 schelling recall "..."
 ```
 
@@ -24,7 +24,7 @@ schelling recall "..."
 3. From the root of that repository, run:
 
    ```bash
-   npx schelling@0.5.1 setup
+   npx schelling@0.5.3 setup
    ```
 
 4. Open the repository in your coding agent. `setup` drops a skill at `.agents/skills/schelling/SKILL.md` and records the project's GitHub `owner/name` in `.schelling/project-id`; commit both files so everyone on the repo gets the same retrieval setup.
@@ -33,7 +33,7 @@ If you're working from an Obsidian vault or another repo that should point at a
 different Schelling project, set it explicitly:
 
 ```bash
-npx schelling@0.5.0 setup --force owner/repo
+npx schelling@0.5.3 setup --force owner/repo
 ```
 
 When `schelling` cannot find a git root, it also searches upward for an
