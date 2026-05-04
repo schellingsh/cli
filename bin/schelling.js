@@ -25,7 +25,7 @@ function usage(exitCode = 0) {
     '  schelling recall "<problem statement>"',
     '  schelling follow_up "<cid>" "<learning>"',
     '  schelling fetch "<cid>"',
-    "  schelling setup [--cwd <path>]",
+    "  schelling setup [--cwd <path>] [--force <project-id>]",
     "",
     "Env:",
     `  SCHELLING_API_BASE   Override API base URL (default: ${DEFAULT_API_BASE})`,
@@ -343,16 +343,47 @@ const PROJECT_ID_RELATIVE = path.join(".schelling", "project-id");
 const DEFAULT_SKILL_URL =
   "https://raw.githubusercontent.com/schellingsh/skill/refs/heads/main/.agents/skills/schelling/SKILL.md";
 
-function getProjectId(startDir) {
-  const repoRoot = findGitRoot(startDir);
-  if (!repoRoot) return null;
+function isDirectory(absPath) {
   try {
-    const raw = fs.readFileSync(path.join(repoRoot, PROJECT_ID_RELATIVE), "utf8");
+    return fs.statSync(absPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function findSchellingRoot(startDir) {
+  let dir = path.resolve(startDir);
+  while (true) {
+    if (fs.existsSync(path.join(dir, PROJECT_ID_RELATIVE))) return dir;
+
+    const hasAgents = isDirectory(path.join(dir, ".agents"));
+    const hasSchelling = isDirectory(path.join(dir, ".schelling"));
+    if (hasAgents && hasSchelling) return dir;
+
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+function findProjectRoot(startDir) {
+  return findGitRoot(startDir) || findSchellingRoot(startDir);
+}
+
+function readProjectIdFile(rootDir) {
+  try {
+    const raw = fs.readFileSync(path.join(rootDir, PROJECT_ID_RELATIVE), "utf8");
     const id = raw.split(/\r?\n/).map((s) => s.trim()).find((s) => s.length > 0);
     return id || null;
   } catch {
     return null;
   }
+}
+
+function getProjectId(startDir) {
+  const rootDir = findProjectRoot(startDir);
+  if (!rootDir) return null;
+  return readProjectIdFile(rootDir);
 }
 
 function getSkillUrl() {
@@ -396,7 +427,7 @@ function userError(message) {
 }
 
 function parseSetupArgs(args) {
-  const opts = { cwd: process.cwd() };
+  const opts = { cwd: process.cwd(), forcedProjectId: null };
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
     if (a === "--cwd") {
@@ -406,6 +437,13 @@ function parseSetupArgs(args) {
       i += 1;
     } else if (a.startsWith("--cwd=")) {
       opts.cwd = a.slice("--cwd=".length);
+    } else if (a === "--force") {
+      const v = args[i + 1];
+      if (!v) throw userError("`--force` requires a `<project-id>` like `owner/repo`.");
+      opts.forcedProjectId = v;
+      i += 1;
+    } else if (a.startsWith("--force=")) {
+      opts.forcedProjectId = a.slice("--force=".length);
     } else {
       throw userError(`Unknown argument for \`setup\`: ${a}`);
     }
@@ -413,38 +451,72 @@ function parseSetupArgs(args) {
   return opts;
 }
 
+function normalizeProjectId(projectId) {
+  const id = typeof projectId === "string" ? projectId.trim() : "";
+  if (!/^[^/\s]+\/[^/\s]+$/.test(id)) {
+    throw userError(`Invalid project id \`${projectId}\`. Expected \`owner/repo\`.`);
+  }
+  return id;
+}
+
 async function cmdSetup(args) {
   const opts = parseSetupArgs(args);
+  const gitRoot = findGitRoot(opts.cwd);
+  const schellingRoot = findSchellingRoot(opts.cwd);
+  const targetRoot = gitRoot || schellingRoot || path.resolve(opts.cwd);
 
-  const repoRoot = findGitRoot(opts.cwd);
-  if (!repoRoot) {
+  let projectId;
+  let projectSource;
+  let detectedRepo = null;
+  if (opts.forcedProjectId) {
+    projectId = normalizeProjectId(opts.forcedProjectId);
+    projectSource = "--force";
+  } else if (gitRoot) {
+    const remotes = gitRemotesAll(gitRoot);
+    const repo = pickGitHubRepo(remotes);
+    if (!repo) {
+      throw userError(
+        `Could not find a github.com remote in \`git remote -v\` for ${gitRoot}.\n` +
+          "Add one with e.g. `git remote add origin git@github.com:<owner>/<repo>.git`, or re-run with `schelling setup --force <owner/repo>`."
+      );
+    }
+    detectedRepo = repo;
+    projectId = `${repo.owner}/${repo.name}`;
+    projectSource = `${repo.remoteName} ${repo.remoteUrl}`;
+  } else if (schellingRoot) {
+    projectId = readProjectIdFile(schellingRoot);
+    if (!projectId) {
+      throw userError(
+        `Found an existing Schelling root at ${schellingRoot}, but ${PROJECT_ID_RELATIVE} is missing or empty.\n` +
+          "Re-run with `schelling setup --force <owner/repo>` to set it explicitly."
+      );
+    }
+    projectSource = `existing ${PROJECT_ID_RELATIVE}`;
+  } else {
     throw userError(
-      "Not inside a git work tree. Run `schelling setup` from somewhere inside a git-tracked project."
+      "Could not find a git root or existing Schelling root.\n" +
+        "Run `schelling setup --force <owner/repo>` to initialize the current directory explicitly."
     );
   }
 
-  const remotes = gitRemotesAll(repoRoot);
-  const repo = pickGitHubRepo(remotes);
-  if (!repo) {
-    throw userError(
-      `Could not find a github.com remote in \`git remote -v\` for ${repoRoot}.\n` +
-        "Add one with e.g. `git remote add origin git@github.com:<owner>/<repo>.git` and re-run `schelling setup`."
-    );
-  }
-
-  const projectId = `${repo.owner}/${repo.name}`;
   const skillUrl = getSkillUrl();
   const skillBody = await downloadSkill(skillUrl);
 
-  const skillAbs = path.join(repoRoot, SKILL_RELATIVE);
-  const projectIdAbs = path.join(repoRoot, PROJECT_ID_RELATIVE);
+  const skillAbs = path.join(targetRoot, SKILL_RELATIVE);
+  const projectIdAbs = path.join(targetRoot, PROJECT_ID_RELATIVE);
 
   const files = [
     { ...writeIfChanged(skillAbs, skillBody), relpath: SKILL_RELATIVE },
     { ...writeIfChanged(projectIdAbs, `${projectId}\n`), relpath: PROJECT_ID_RELATIVE }
   ];
 
-  const lines = [`Detected project: ${projectId} (from ${repo.remoteName} ${repo.remoteUrl})`, ""];
+  const lines = [
+    detectedRepo ?
+      `Detected project: ${projectId} (from ${projectSource})` :
+      `Using project: ${projectId} (from ${projectSource})`,
+    `Target root: ${targetRoot}`,
+    ""
+  ];
   for (const f of files) {
     const verb =
       f.action === "created" ? "Created  " :
