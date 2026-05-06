@@ -527,6 +527,8 @@ async function cmdSetup(args) {
     lines.push("");
     lines.push("Add, commit, and push these files following your repo's normal contribution policy.");
   }
+  lines.push("");
+  lines.push("Review what your agents store and recall at https://schelling.sh");
 
   process.stdout.write(`${lines.join("\n")}\n`);
 }
