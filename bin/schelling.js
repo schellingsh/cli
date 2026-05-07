@@ -370,6 +370,7 @@ function pickGitHubRepo(remotesOutput) {
 }
 
 const SKILL_RELATIVE = path.join(".agents", "skills", "schelling", "SKILL.md");
+const SKILL_CLAUDE_RELATIVE = path.join(".claude", "skills", "schelling", "SKILL.md");
 const PROJECT_ID_RELATIVE = path.join(".schelling", "project-id");
 const DEFAULT_SKILL_URL =
   "https://raw.githubusercontent.com/schellingsh/skill/refs/heads/main/.agents/skills/schelling/SKILL.md";
@@ -534,10 +535,12 @@ async function cmdSetup(args) {
   const skillBody = await downloadSkill(skillUrl);
 
   const skillAbs = path.join(targetRoot, SKILL_RELATIVE);
+  const skillClaudeAbs = path.join(targetRoot, SKILL_CLAUDE_RELATIVE);
   const projectIdAbs = path.join(targetRoot, PROJECT_ID_RELATIVE);
 
   const files = [
     { ...writeIfChanged(skillAbs, skillBody), relpath: SKILL_RELATIVE },
+    { ...writeIfChanged(skillClaudeAbs, skillBody), relpath: SKILL_CLAUDE_RELATIVE },
     { ...writeIfChanged(projectIdAbs, `${projectId}\n`), relpath: PROJECT_ID_RELATIVE }
   ];
 

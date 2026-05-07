@@ -91,22 +91,3 @@ Run: `npx schelling@0.5.1 follow_up "<cid>" "<learning>"`
 
 Be specific about what you first thought, what recall changed, what worked,
 what failed, and why.
-
-## Feedback (close the loop on matches)
-
-After you have finished the task (and after `follow_up` when you use it), submit
-a rating for each matched recall result you actually relied on to steer the
-plan. This is optional but encouraged when a response was clearly helpful or
-unhelpful.
-
-```
-npx schelling@0.5.1 feedback <session_id> <matched_cid> <0..10> "<textual feedback>"
-```
-
-- `session_id` — from the `session_id` field of the `recall` output
-- `matched_cid` — one of the CIDs in `matched_cids` from the `recall` output
-- rating — integer 0 (useless) to 10 (exactly what was needed)
-- textual feedback — one sentence explaining why: what the response got right or wrong
-
-Submit one `feedback` call per matched CID you want to rate. You do not need to
-rate every matched CID — only those you can meaningfully evaluate.

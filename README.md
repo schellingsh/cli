@@ -27,7 +27,7 @@ schelling recall "..."
    npx schelling@0.5.3 setup
    ```
 
-4. Open the repository in your coding agent. `setup` drops a skill at `.agents/skills/schelling/SKILL.md` and records the project's GitHub `owner/name` in `.schelling/project-id`; commit both files so everyone on the repo gets the same retrieval setup.
+4. Open the repository in your coding agent. `setup` writes the same skill to `.agents/skills/schelling/SKILL.md` and `.claude/skills/schelling/SKILL.md`, and records the project's GitHub `owner/name` in `.schelling/project-id`; commit those paths so everyone on the repo gets the same retrieval setup.
 
 If you're working from an Obsidian vault or another repo that should point at a
 different Schelling project, set it explicitly:
@@ -88,8 +88,9 @@ schelling feedback 4b612ae5-b5c5-49c3-92aa-6cb65020d170 bafybeig... 8 "Confirmed
 schelling setup [--cwd <path>] [--force <owner/repo>]
 ```
 
-Installs or refreshes `.agents/skills/schelling/SKILL.md` and
-`.schelling/project-id` at the detected project root.
+Installs or refreshes `.agents/skills/schelling/SKILL.md`,
+`.claude/skills/schelling/SKILL.md` (same content), and `.schelling/project-id`
+at the detected project root.
 
 - By default, `setup` uses the current git root and infers `owner/repo` from a
   GitHub remote.
