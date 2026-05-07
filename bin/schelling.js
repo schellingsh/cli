@@ -50,10 +50,8 @@ function getApiBase() {
   return (process.env.SCHELLING_API_BASE || DEFAULT_API_BASE).replace(/\/+$/, "");
 }
 
-function sessionsResourceUrl(apiBase, sessionId, projectId) {
-  const url = new URL(`${apiBase}/sessions/${encodeURIComponent(sessionId)}`);
-  if (projectId) url.searchParams.set("project_id", projectId);
-  return url.href;
+function feedbackCreateUrl(apiBase) {
+  return `${apiBase}/feedback`;
 }
 
 function userAgent() {
@@ -281,12 +279,13 @@ async function cmdFeedback(sessionId, matchedCid, rating, text) {
   }
 
   const body = {
-    match_ratings: {
-      [mc]: { rating: ratingNum, reason: text }
-    }
+    subject: { type: "match", id: mc },
+    kind: "match_rating",
+    payload: { rating: ratingNum, reason: text, session_id: sid }
   };
+  if (projectId) body.project_id = projectId;
 
-  const res = await fetch(sessionsResourceUrl(apiBase, sid, projectId), {
+  const res = await fetch(feedbackCreateUrl(apiBase), {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -322,9 +321,14 @@ async function cmdImpactNote(sessionId, impactNote) {
   if (!sid) throw userError("session_id must be a non-empty string.");
   if (!note) throw userError("Impact note must be a non-empty string.");
 
-  const body = { impact_notes: [note] };
+  const body = {
+    subject: { type: "session", id: sid },
+    kind: "impact_note",
+    payload: { text: note }
+  };
+  if (projectId) body.project_id = projectId;
 
-  const res = await fetch(sessionsResourceUrl(apiBase, sid, projectId), {
+  const res = await fetch(feedbackCreateUrl(apiBase), {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -344,7 +348,8 @@ async function cmdImpactNote(sessionId, impactNote) {
     kind: "impact_note",
     project_id: projectId,
     session_id: sid,
-    impact_notes: [note],
+    subject: body.subject,
+    payload: body.payload,
     response: data
   };
 }
