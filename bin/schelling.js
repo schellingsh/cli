@@ -33,6 +33,9 @@ function usage(exitCode = 0) {
     `  SCHELLING_API_BASE   Override API base URL (default: ${DEFAULT_API_BASE})`,
     `  SCHELLING_SKILL_URL  Override SKILL.md source URL used by \`setup\``,
     "",
+    "Notes:",
+    "  Both `feedback` and `impact_note` POST retrospective records to /feedback.",
+    "",
     "Output:",
     "  JSON to stdout. Errors go to stderr and exit non-zero."
   ].join("\n");
@@ -52,6 +55,25 @@ function getApiBase() {
 
 function feedbackCreateUrl(apiBase) {
   return `${apiBase}/feedback`;
+}
+
+async function postFeedbackCreate(apiBase, body) {
+  const res = await fetch(feedbackCreateUrl(apiBase), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "accept": "application/json",
+      "user-agent": userAgent()
+    },
+    body: JSON.stringify(body)
+  });
+  const responseText = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}${responseText ? `\n${responseText}` : ""}`);
+  try {
+    return JSON.parse(responseText);
+  } catch {
+    return { raw: responseText };
+  }
 }
 
 function userAgent() {
@@ -285,21 +307,7 @@ async function cmdFeedback(sessionId, matchedCid, rating, text) {
   };
   if (projectId) body.project_id = projectId;
 
-  const res = await fetch(feedbackCreateUrl(apiBase), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "accept": "application/json",
-      "user-agent": userAgent()
-    },
-    body: JSON.stringify(body)
-  });
-
-  const responseText = await res.text();
-  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}${responseText ? `\n${responseText}` : ""}`);
-
-  let data;
-  try { data = JSON.parse(responseText); } catch { data = { raw: responseText }; }
+  const data = await postFeedbackCreate(apiBase, body);
 
   return {
     kind: "feedback",
@@ -328,21 +336,7 @@ async function cmdImpactNote(sessionId, impactNote) {
   };
   if (projectId) body.project_id = projectId;
 
-  const res = await fetch(feedbackCreateUrl(apiBase), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "accept": "application/json",
-      "user-agent": userAgent()
-    },
-    body: JSON.stringify(body)
-  });
-
-  const responseText = await res.text();
-  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}${responseText ? `\n${responseText}` : ""}`);
-
-  let data;
-  try { data = JSON.parse(responseText); } catch { data = { raw: responseText }; }
+  const data = await postFeedbackCreate(apiBase, body);
 
   return {
     kind: "impact_note",
