@@ -101,10 +101,26 @@ Creates an append-only retrospective via **`POST /feedback`**: **`kind`**
 `.schelling/project-id` exists. Outputs **JSON** to stdout (**`201 Created`**
 normally, with **`feedback_id`**, **`subject`**, **`kind`**, **`payload`**).
 
+When authoring from an agent, apply the **anti-generic** rules in
+**`.agents/skills/schelling/SKILL.md`**: a note must cite concrete matched or
+session artifact(s) and describe a **decision change**—generic gratitude alone
+is not a valid **`impact_note`**.
+
 Separate from **`follow_up`** (post CID residue) and from the **`feedback`**
 subcommand above (**`kind` `match_rating`**, with **`payload.match_cid`**). During **`post_many`**
 the API still accepts optional **`impact_notes`** alongside **`problems`** for
 upstream session intent (this minimal **`recall`** path does not expose that field yet).
+
+### outcome
+
+```bash
+schelling outcome <session_id> helped_direction|helped_implementation|irrelevant|missing_memory
+```
+
+Session-level categorical signal via **`POST /feedback`**, **`kind` `session_outcome`**,
+session **`subject`**, **`payload.outcome`** = one enum value. Intended to stand
+alone from optional **`impact_note`** text so under-helpful sessions remain
+measurable when agents skip narratives.
 
 ### setup
 

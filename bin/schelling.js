@@ -19,6 +19,13 @@ function readOwnVersion() {
 const VERSION = readOwnVersion();
 const DEFAULT_API_BASE = "https://api.schelling.sh";
 
+const SESSION_OUTCOME_VALUES = new Set([
+  "helped_direction",
+  "helped_implementation",
+  "irrelevant",
+  "missing_memory"
+]);
+
 function usage(exitCode = 0) {
   const msg = [
     "Usage:",
@@ -27,6 +34,7 @@ function usage(exitCode = 0) {
     '  schelling fetch "<cid>"',
     "  schelling feedback <session_id> <matched_cid> <0..10> \"<textual feedback>\"",
     "  schelling impact_note <session_id> \"<how Schelling helped the mission>\"",
+    "  schelling outcome <session_id> helped_direction|helped_implementation|irrelevant|missing_memory",
     "  schelling setup [--cwd <path>] [--force <project-id>]",
     "",
     "Env:",
@@ -34,7 +42,7 @@ function usage(exitCode = 0) {
     `  SCHELLING_SKILL_URL  Override SKILL.md source URL used by \`setup\``,
     "",
     "Notes:",
-    "  Both `feedback` and `impact_note` POST retrospective records to /feedback.",
+    "  Both `feedback`, `impact_note`, and `outcome` POST retrospective records to /feedback.",
     "",
     "Output:",
     "  JSON to stdout. Errors go to stderr and exit non-zero."
@@ -344,6 +352,40 @@ async function cmdImpactNote(sessionId, impactNote) {
     session_id: sid,
     subject: body.subject,
     payload: body.payload,
+    response: data
+  };
+}
+
+async function cmdOutcome(sessionId, outcomeRaw) {
+  const apiBase = getApiBase();
+  const projectId = getProjectId(process.cwd());
+
+  const sid = typeof sessionId === "string" ? sessionId.trim() : "";
+  if (!sid) throw userError("session_id must be a non-empty string.");
+
+  const outcome =
+    typeof outcomeRaw === "string" ? outcomeRaw.trim() : "";
+  if (!outcome) throw userError("Outcome must be a non-empty string.");
+  if (!SESSION_OUTCOME_VALUES.has(outcome)) {
+    throw userError(
+      `Outcome must be one of: ${[...SESSION_OUTCOME_VALUES].join(", ")}. Got: ${outcome}`
+    );
+  }
+
+  const body = {
+    subject: { type: "session", id: sid },
+    kind: "session_outcome",
+    payload: { outcome }
+  };
+  if (projectId) body.project_id = projectId;
+
+  const data = await postFeedbackCreate(apiBase, body);
+
+  return {
+    kind: "outcome",
+    project_id: projectId,
+    session_id: sid,
+    outcome,
     response: data
   };
 }
@@ -671,6 +713,15 @@ async function main() {
       const note = args[2];
       if (!sessionId || !note) usage(1);
       const out = await cmdImpactNote(sessionId, note);
+      process.stdout.write(JSON.stringify(out) + "\n");
+      return;
+    }
+
+    if (cmd === "outcome") {
+      const sessionId = args[1];
+      const outcome = args[2];
+      if (!sessionId || !outcome) usage(1);
+      const out = await cmdOutcome(sessionId, outcome);
       process.stdout.write(JSON.stringify(out) + "\n");
       return;
     }
