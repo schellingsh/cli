@@ -72,15 +72,32 @@ Fetches an existing CID record from the API. Outputs **JSON** to stdout.
 schelling feedback <session_id> <matched_cid> <0..10> "<textual feedback>"
 ```
 
-Submits a rating for one matched recall result. Use the `session_id` and each
-`matched_cid` from the JSON output of `recall`. Rating must be an integer from
-0 (not useful) through 10 (exactly what was needed). Outputs **JSON** to stdout.
+Submits **`match_ratings`** for one matched CID by calling **`POST
+/sessions/{session_id}`**: the rating and your text become `rating` and
+`reason` under that CID key in `match_ratings`. Use `session_id` and
+`matched_cid` from the `recall` JSON. Rating must be integer 0–10. Outputs
+**JSON** to stdout (updated session metadata from the API).
+
 
 Example:
 
 ```bash
 schelling feedback 4b612ae5-b5c5-49c3-92aa-6cb65020d170 bafybeig... 8 "Confirmed the rollback order we used."
 ```
+
+### impact_note
+
+```bash
+schelling impact_note <session_id> "<how Schelling helped the mission>"
+```
+
+Appends **`impact_notes`** for that recall session via **`POST
+/sessions/{session_id}`** (merged on the server). Uses `session_id` from `recall`.
+Outputs **JSON** to stdout.
+
+
+This is separate from `follow_up` (residue on your post CID) and from
+`feedback` (per matched CID ratings).
 
 ### setup
 
