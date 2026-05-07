@@ -26,6 +26,7 @@ function usage(exitCode = 0) {
     '  schelling follow_up "<cid>" "<learning>"',
     '  schelling fetch "<cid>"',
     "  schelling feedback <session_id> <matched_cid> <0..10> \"<textual feedback>\"",
+    "  schelling impact_note <session_id> \"<how Schelling helped the mission>\"",
     "  schelling setup [--cwd <path>] [--force <project-id>]",
     "",
     "Env:",
@@ -47,6 +48,12 @@ function fail(message, exitCode = 1) {
 
 function getApiBase() {
   return (process.env.SCHELLING_API_BASE || DEFAULT_API_BASE).replace(/\/+$/, "");
+}
+
+function sessionsResourceUrl(apiBase, sessionId, projectId) {
+  const url = new URL(`${apiBase}/sessions/${encodeURIComponent(sessionId)}`);
+  if (projectId) url.searchParams.set("project_id", projectId);
+  return url.href;
 }
 
 function userAgent() {
@@ -263,15 +270,23 @@ async function cmdFeedback(sessionId, matchedCid, rating, text) {
   const apiBase = getApiBase();
   const projectId = getProjectId(process.cwd());
 
+  const sid = typeof sessionId === "string" ? sessionId.trim() : "";
+  const mc = typeof matchedCid === "string" ? matchedCid.trim() : "";
+  if (!sid) throw userError("session_id must be a non-empty string.");
+  if (!mc) throw userError("matched_cid must be a non-empty string.");
+
   const ratingNum = Number(rating);
   if (!Number.isInteger(ratingNum) || ratingNum < 0 || ratingNum > 10) {
     throw userError(`Rating must be an integer between 0 and 10, got: ${rating}`);
   }
 
-  const body = { session_id: sessionId, matched_cid: matchedCid, rating: ratingNum, feedback: text };
-  if (projectId) body.project_id = projectId;
+  const body = {
+    match_ratings: {
+      [mc]: { rating: ratingNum, reason: text }
+    }
+  };
 
-  const res = await fetch(`${apiBase}/feedback`, {
+  const res = await fetch(sessionsResourceUrl(apiBase, sid, projectId), {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -287,7 +302,51 @@ async function cmdFeedback(sessionId, matchedCid, rating, text) {
   let data;
   try { data = JSON.parse(responseText); } catch { data = { raw: responseText }; }
 
-  return { kind: "feedback", project_id: projectId, session_id: sessionId, matched_cid: matchedCid, rating: ratingNum, feedback: text, response: data };
+  return {
+    kind: "feedback",
+    project_id: projectId,
+    session_id: sid,
+    matched_cid: mc,
+    rating: ratingNum,
+    reason: text,
+    response: data
+  };
+}
+
+async function cmdImpactNote(sessionId, impactNote) {
+  const apiBase = getApiBase();
+  const projectId = getProjectId(process.cwd());
+
+  const sid = typeof sessionId === "string" ? sessionId.trim() : "";
+  const note = typeof impactNote === "string" ? impactNote.trim() : "";
+  if (!sid) throw userError("session_id must be a non-empty string.");
+  if (!note) throw userError("Impact note must be a non-empty string.");
+
+  const body = { impact_notes: [note] };
+
+  const res = await fetch(sessionsResourceUrl(apiBase, sid, projectId), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "accept": "application/json",
+      "user-agent": userAgent()
+    },
+    body: JSON.stringify(body)
+  });
+
+  const responseText = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}${responseText ? `\n${responseText}` : ""}`);
+
+  let data;
+  try { data = JSON.parse(responseText); } catch { data = { raw: responseText }; }
+
+  return {
+    kind: "impact_note",
+    project_id: projectId,
+    session_id: sid,
+    impact_notes: [note],
+    response: data
+  };
 }
 
 async function cmdFetch(cid) {
@@ -604,6 +663,15 @@ async function main() {
       const [sessionId, matchedCid, rating, text] = args.slice(1);
       if (!sessionId || !matchedCid || rating === undefined || !text) usage(1);
       const out = await cmdFeedback(sessionId, matchedCid, rating, text);
+      process.stdout.write(JSON.stringify(out) + "\n");
+      return;
+    }
+
+    if (cmd === "impact_note") {
+      const sessionId = args[1];
+      const note = args[2];
+      if (!sessionId || !note) usage(1);
+      const out = await cmdImpactNote(sessionId, note);
       process.stdout.write(JSON.stringify(out) + "\n");
       return;
     }
