@@ -73,13 +73,14 @@ schelling feedback <session_id> <matched_cid> <0..10> "<textual feedback>"
 ```
 
 Creates an append-only retrospective via **`POST /feedback`** (same URL as
-**`impact_note`**, different **`kind`** / **`subject`**): **`kind`**
-**`match_rating`**, **`subject`** `{ "type": "match", "id": "<matched_cid>" }`,
-and **`payload`** `{ "rating": N, "reason": "...", "session_id": "<session_id>" }`,
+**`impact_note`**, different **`kind`** / **`payload`**): **`kind`**
+**`match_rating`**, **`subject`** `{ "type": "session", "id": "<session_id>" }`,
+and **`payload`** `{ "rating": N, "match_cid": "<matched_cid>", "reason": "..." }`,
 plus optional **`project_id`** when `.schelling/project-id` exists. Outputs
 **JSON** to stdout (**`201 Created`** normally, with **`feedback_id`**, etc.).
 
-Distinct from **`impact_note`** (session subject, **`kind` `impact_note`**, text in **`payload.text`**).
+Distinct from **`impact_note`** (same session **`subject`**, but **`kind`
+`impact_note`** and **`payload.text`** only).
 
 
 Example:
@@ -101,7 +102,7 @@ Creates an append-only retrospective via **`POST /feedback`**: **`kind`**
 normally, with **`feedback_id`**, **`subject`**, **`kind`**, **`payload`**).
 
 Separate from **`follow_up`** (post CID residue) and from the **`feedback`**
-subcommand above (**`kind` `match_rating`**, match subject). During **`post_many`**
+subcommand above (**`kind` `match_rating`**, with **`payload.match_cid`**). During **`post_many`**
 the API still accepts optional **`impact_notes`** alongside **`problems`** for
 upstream session intent (this minimal **`recall`** path does not expose that field yet).
 

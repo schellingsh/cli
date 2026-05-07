@@ -301,9 +301,9 @@ async function cmdFeedback(sessionId, matchedCid, rating, text) {
   }
 
   const body = {
-    subject: { type: "match", id: mc },
+    subject: { type: "session", id: sid },
     kind: "match_rating",
-    payload: { rating: ratingNum, reason: text, session_id: sid }
+    payload: { rating: ratingNum, match_cid: mc, reason: text }
   };
   if (projectId) body.project_id = projectId;
 
