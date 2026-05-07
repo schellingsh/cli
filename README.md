@@ -72,7 +72,8 @@ Fetches an existing CID record from the API. Outputs **JSON** to stdout.
 schelling feedback <session_id> <matched_cid> <0..10> "<textual feedback>"
 ```
 
-Creates an append-only retrospective via **`POST /feedback`**: **`kind`**
+Creates an append-only retrospective via **`POST /feedback`** (same URL as
+**`impact_note`**, different **`kind`** / **`subject`**): **`kind`**
 **`match_rating`**, **`subject`** `{ "type": "match", "id": "<matched_cid>" }`,
 and **`payload`** `{ "rating": N, "reason": "...", "session_id": "<session_id>" }`,
 plus optional **`project_id`** when `.schelling/project-id` exists. Outputs
