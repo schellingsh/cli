@@ -25,6 +25,7 @@ function usage(exitCode = 0) {
     '  schelling recall "<problem statement>"',
     '  schelling follow_up "<cid>" "<learning>"',
     '  schelling fetch "<cid>"',
+    "  schelling feedback <session_id> <matched_cid> <0..10> \"<textual feedback>\"",
     "  schelling setup [--cwd <path>] [--force <project-id>]",
     "",
     "Env:",
@@ -256,6 +257,37 @@ async function cmdFollowUp(cid, learning) {
   try { data = JSON.parse(text); } catch { data = { raw: text }; }
 
   return { kind: "follow_up", project_id: projectId, cid, learning, response: data };
+}
+
+async function cmdFeedback(sessionId, matchedCid, rating, text) {
+  const apiBase = getApiBase();
+  const projectId = getProjectId(process.cwd());
+
+  const ratingNum = Number(rating);
+  if (!Number.isInteger(ratingNum) || ratingNum < 0 || ratingNum > 10) {
+    throw userError(`Rating must be an integer between 0 and 10, got: ${rating}`);
+  }
+
+  const body = { session_id: sessionId, matched_cid: matchedCid, rating: ratingNum, feedback: text };
+  if (projectId) body.project_id = projectId;
+
+  const res = await fetch(`${apiBase}/feedback`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "accept": "application/json",
+      "user-agent": userAgent()
+    },
+    body: JSON.stringify(body)
+  });
+
+  const responseText = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}${responseText ? `\n${responseText}` : ""}`);
+
+  let data;
+  try { data = JSON.parse(responseText); } catch { data = { raw: responseText }; }
+
+  return { kind: "feedback", project_id: projectId, session_id: sessionId, matched_cid: matchedCid, rating: ratingNum, feedback: text, response: data };
 }
 
 async function cmdFetch(cid) {
@@ -561,6 +593,14 @@ async function main() {
       const cid = args[1];
       if (!cid) usage(1);
       const out = await cmdFetch(cid);
+      process.stdout.write(JSON.stringify(out) + "\n");
+      return;
+    }
+
+    if (cmd === "feedback") {
+      const [sessionId, matchedCid, rating, text] = args.slice(1);
+      if (!sessionId || !matchedCid || rating === undefined || !text) usage(1);
+      const out = await cmdFeedback(sessionId, matchedCid, rating, text);
       process.stdout.write(JSON.stringify(out) + "\n");
       return;
     }

@@ -66,6 +66,22 @@ schelling fetch "<cid>"
 
 Fetches an existing CID record from the API. Outputs **JSON** to stdout.
 
+### feedback
+
+```bash
+schelling feedback <session_id> <matched_cid> <0..10> "<textual feedback>"
+```
+
+Submits a rating for one matched recall result. Use the `session_id` and each
+`matched_cid` from the JSON output of `recall`. Rating must be an integer from
+0 (not useful) through 10 (exactly what was needed). Outputs **JSON** to stdout.
+
+Example:
+
+```bash
+schelling feedback 4b612ae5-b5c5-49c3-92aa-6cb65020d170 bafybeig... 8 "Confirmed the rollback order we used."
+```
+
 ### setup
 
 ```bash
