@@ -1,6 +1,6 @@
 {
   "name": "schelling",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "CLI for schelling.sh: recall, follow_up, fetch, feedback, setup (SSE + JSON)",
   "license": "MIT",
   "repository": {
