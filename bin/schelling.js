@@ -36,13 +36,16 @@ function usage(exitCode = 0) {
     "  schelling impact_note <session_id> \"<how Schelling helped the mission>\"",
     "  schelling outcome <session_id> helped_direction|helped_implementation|irrelevant|missing_memory",
     "  schelling setup [--cwd <path>] [--force <project-id>]",
+    "  schelling wipe <project_id> [--owner-key <key>]",
     "",
     "Env:",
     `  SCHELLING_API_BASE   Override API base URL (default: ${DEFAULT_API_BASE})`,
     `  SCHELLING_SKILL_URL  Override SKILL.md source URL used by \`setup\``,
+    "  SCHELLING_OWNER_KEY  Owner API key for admin commands (e.g. wipe)",
     "",
     "Notes:",
     "  Both `feedback`, `impact_note`, and `outcome` POST retrospective records to /feedback.",
+    "  `wipe` deletes all data for a project_id and requires an owner API key.",
     "",
     "Output:",
     "  JSON to stdout. Errors go to stderr and exit non-zero."
@@ -591,6 +594,37 @@ function normalizeProjectId(projectId) {
   return id;
 }
 
+async function cmdWipe(projectId, ownerKey) {
+  const apiBase = getApiBase();
+  const pid = normalizeProjectId(projectId);
+
+  const key = ownerKey || process.env.SCHELLING_OWNER_KEY || "";
+  if (!key) {
+    throw userError(
+      "Owner API key is required. Pass --owner-key <key> or set SCHELLING_OWNER_KEY."
+    );
+  }
+
+  const res = await fetch(`${apiBase}/wipe`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "accept": "application/json",
+      "user-agent": userAgent(),
+      "authorization": `Bearer ${key}`
+    },
+    body: JSON.stringify({ project_id: pid })
+  });
+
+  const text = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}${text ? `\n${text}` : ""}`);
+
+  let data;
+  try { data = JSON.parse(text); } catch { data = { raw: text }; }
+
+  return { kind: "wipe", project_id: pid, response: data };
+}
+
 async function cmdSetup(args) {
   const opts = parseSetupArgs(args);
   const gitRoot = findGitRoot(opts.cwd);
@@ -730,6 +764,23 @@ async function main() {
       // `setup` is human-run, not piped. It writes a plain-text success
       // message directly to stdout instead of JSON like the other commands.
       await cmdSetup(args.slice(1));
+      return;
+    }
+
+    if (cmd === "wipe") {
+      const projectId = args[1];
+      if (!projectId) usage(1);
+      let ownerKey = null;
+      for (let i = 2; i < args.length; i++) {
+        if (args[i] === "--owner-key") {
+          ownerKey = args[i + 1] || null;
+          i += 1;
+        } else if (args[i].startsWith("--owner-key=")) {
+          ownerKey = args[i].slice("--owner-key=".length);
+        }
+      }
+      const out = await cmdWipe(projectId, ownerKey);
+      process.stdout.write(JSON.stringify(out) + "\n");
       return;
     }
 
