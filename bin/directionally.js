@@ -114,6 +114,33 @@ function urlParts(apiBase, pathname) {
   };
 }
 
+// ---- file tail stream -------------------------------------------------------
+
+function createFileTailStream(filePath) {
+  const { PassThrough } = require("node:stream");
+  const stream = new PassThrough();
+  let pos = 0;
+
+  function readNew() {
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.size > pos) {
+        const buf = Buffer.alloc(stat.size - pos);
+        const fd = fs.openSync(filePath, "r");
+        fs.readSync(fd, buf, 0, buf.length, pos);
+        fs.closeSync(fd);
+        pos = stat.size;
+        stream.write(buf);
+      }
+    } catch { /* ignore transient errors */ }
+  }
+
+  readNew();
+  fs.watchFile(filePath, { interval: 100, persistent: true }, readNew);
+  stream.on("close", () => fs.unwatchFile(filePath, readNew));
+  return stream;
+}
+
 // ---- bridge -----------------------------------------------------------------
 
 // subsession_id -> { req, sessionId, seq }
@@ -239,8 +266,15 @@ function openResumeStream(sessionId, seq, projectId, apiBase) {
   return state;
 }
 
-async function cmdResume(sessionId, seqArg) {
-  if (!sessionId) { console.error("Usage: directionally resume <session_id> [seq]"); process.exit(1); }
+async function cmdResume(args) {
+  let sessionId = null, seqArg = null, tailTmp = false;
+  for (const arg of args) {
+    if (arg === "--tailtmp") tailTmp = true;
+    else if (!sessionId) sessionId = arg;
+    else if (!seqArg) seqArg = arg;
+    else throw userError(`Unexpected argument: ${arg}`);
+  }
+  if (!sessionId) { console.error("Usage: directionally resume <session_id> [seq] [--tailtmp]"); process.exit(1); }
   const seq = seqArg ? (parseInt(seqArg, 10) || 0) : 0;
 
   const apiBase = getApiBase();
@@ -251,10 +285,21 @@ async function cmdResume(sessionId, seqArg) {
     process.exit(1);
   }
 
-  const state = openResumeStream(sessionId, seq, projectId, apiBase);
-  writeStdout({ kind: "bridge_started", api_base: apiBase, project_id: projectId, session_id: sessionId, received_at: nowIso() });
+  let inputFile = null;
+  let inputStream = process.stdin;
 
-  const rl = readline.createInterface({ input: process.stdin, terminal: false });
+  if (tailTmp) {
+    inputFile = path.join(process.env.TMPDIR || "/tmp", "bridge_in");
+    fs.writeFileSync(inputFile, "", { flag: "a" });
+    inputStream = createFileTailStream(inputFile);
+  }
+
+  const state = openResumeStream(sessionId, seq, projectId, apiBase);
+  const startedMsg = { kind: "bridge_started", api_base: apiBase, project_id: projectId, session_id: sessionId, received_at: nowIso() };
+  if (inputFile) startedMsg.input_file = inputFile;
+  writeStdout(startedMsg);
+
+  const rl = readline.createInterface({ input: inputStream, terminal: false });
 
   rl.on("line", (line) => {
     line = line.trim();
@@ -269,10 +314,17 @@ async function cmdResume(sessionId, seqArg) {
 
   rl.on("close", () => {
     try { state.req.end(); } catch { /* ignore */ }
+    if (inputStream !== process.stdin) inputStream.destroy();
   });
 }
 
-async function cmdBridge() {
+async function cmdBridge(args) {
+  let tailTmp = false;
+  for (const arg of args) {
+    if (arg === "--tailtmp") tailTmp = true;
+    else throw userError(`Unknown argument: ${arg}`);
+  }
+
   const apiBase = getApiBase();
   const projectId = getProjectId(process.cwd());
 
@@ -281,9 +333,20 @@ async function cmdBridge() {
     process.exit(1);
   }
 
-  writeStdout({ kind: "bridge_started", api_base: apiBase, project_id: projectId, received_at: nowIso() });
+  let inputFile = null;
+  let inputStream = process.stdin;
 
-  const rl = readline.createInterface({ input: process.stdin, terminal: false });
+  if (tailTmp) {
+    inputFile = path.join(process.env.TMPDIR || "/tmp", "bridge_in");
+    fs.writeFileSync(inputFile, "", { flag: "a" });
+    inputStream = createFileTailStream(inputFile);
+  }
+
+  const startedMsg = { kind: "bridge_started", api_base: apiBase, project_id: projectId, received_at: nowIso() };
+  if (inputFile) startedMsg.input_file = inputFile;
+  writeStdout(startedMsg);
+
+  const rl = readline.createInterface({ input: inputStream, terminal: false });
 
   rl.on("line", (line) => {
     line = line.trim();
@@ -300,6 +363,7 @@ async function cmdBridge() {
     for (const [, state] of activeSessions) {
       try { state.req.end(); } catch { /* ignore */ }
     }
+    if (inputStream !== process.stdin) inputStream.destroy();
   });
 }
 
@@ -388,13 +452,32 @@ async function cmdSetup(args) {
   process.stdout.write(lines.join("\n") + "\n");
 }
 
+// ---- append -----------------------------------------------------------------
+
+function cmdAppend(args) {
+  let name = null, ndjson = null;
+  for (const arg of args) {
+    if (!name) name = arg;
+    else if (!ndjson) ndjson = arg;
+    else throw userError(`Unexpected argument: ${arg}`);
+  }
+  if (!name || !ndjson) {
+    console.error("Usage: directionally append <name> <ndjson>");
+    process.exit(1);
+  }
+  try { JSON.parse(ndjson); } catch (e) { fail(`Invalid JSON: ${e.message}`); }
+  const filePath = path.join(process.env.TMPDIR || "/tmp", name);
+  fs.appendFileSync(filePath, ndjson.trim() + "\n");
+}
+
 // ---- usage ------------------------------------------------------------------
 
 function usage(code = 0) {
   const msg = [
     "Usage:",
-    "  directionally bridge",
-    "  directionally resume <session_id> [seq]",
+    "  directionally bridge [--tailtmp]",
+    "  directionally resume <session_id> [seq] [--tailtmp]",
+    "  directionally append <name> <ndjson>",
     "  directionally setup [--cwd <path>] [--force <owner/repo>]",
     "",
     "Env:",
@@ -412,8 +495,9 @@ async function main() {
   if (!cmd || cmd === "-h" || cmd === "--help" || cmd === "help") usage(0);
 
   try {
-    if (cmd === "bridge") { await cmdBridge(); return; }
-    if (cmd === "resume") { await cmdResume(rest[0], rest[1]); return; }
+    if (cmd === "bridge") { await cmdBridge(rest); return; }
+    if (cmd === "resume") { await cmdResume(rest); return; }
+    if (cmd === "append") { cmdAppend(rest); return; }
     if (cmd === "setup") { await cmdSetup(rest); return; }
     usage(1);
   } catch (err) {
