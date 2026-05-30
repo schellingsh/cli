@@ -1,7 +1,7 @@
 {
-  "name": "schelling",
-  "version": "0.5.5",
-  "description": "CLI for schelling.sh: recall, follow_up, fetch, feedback, impact_note, outcome, setup (SSE + JSON)",
+  "name": "directionally",
+  "version": "0.1.0",
+  "description": "CLI bridge for Directionally: stream elaborations, receive considerations, write back outcomes.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -10,16 +10,16 @@
   "bugs": {
     "url": "https://github.com/schellingsh/cli/issues"
   },
-  "homepage": "https://schelling.sh",
+  "homepage": "https://directionally.ai",
   "keywords": [
     "cli",
-    "sse",
+    "agent",
+    "streaming",
     "retrieval",
-    "memory",
-    "agent"
+    "directionally"
   ],
   "bin": {
-    "schelling": "bin/schelling.js"
+    "directionally": "bin/directionally.js"
   },
   "engines": {
     "node": ">=18.0.0"
