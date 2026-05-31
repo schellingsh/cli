@@ -1,6 +1,6 @@
 {
   "name": "directionally",
-  "version": "0.1.4",
+  "version": "0.1.6",
   "description": "CLI bridge for Directionally: stream elaborations, receive considerations, write back outcomes.",
   "license": "MIT",
   "repository": {

@@ -115,6 +115,10 @@ function urlParts(apiBase, pathname) {
   };
 }
 
+function dbg(...args) {
+  if (process.env.DIRECTIONALLY_DEBUG) process.stderr.write("[debug] " + args.join(" ") + "\n");
+}
+
 // ---- file tail stream -------------------------------------------------------
 
 function createFileTailStream(filePath) {
@@ -144,20 +148,16 @@ function createFileTailStream(filePath) {
 
 // ---- bridge -----------------------------------------------------------------
 
-// subsession_id -> { req, sessionId, seq }
-const activeSessions = new Map();
-
-// Set by cmdBridge when --tailtmp is active so openSessionStream can symlink
+// Set by cmdBridge when --tailtmp is active so openBridgeStream can symlink
 // the session_id back to the input file once the backend assigns one.
 let _tailtmpInputFile = null;
 
-function openSessionStream(subsessionId, projectId, apiBase) {
-  writeStdout({ kind: "subsession_create", subsession_id: subsessionId, received_at: nowIso() });
-
+function openBridgeStream(projectId, apiBase) {
   const parts = urlParts(apiBase, `/sessions/${encodeURIComponent(projectId)}`);
   const mod = pickModule(apiBase);
   const state = { req: null, sessionId: null, seq: 0 };
-  activeSessions.set(subsessionId, state);
+
+  dbg(`POST ${apiBase}/sessions/${encodeURIComponent(projectId)}`);
 
   const req = mod.request({
     ...parts,
@@ -169,6 +169,7 @@ function openSessionStream(subsessionId, projectId, apiBase) {
       "user-agent": userAgent(),
     },
   }, (res) => {
+    dbg(`bridge stream response: HTTP ${res.statusCode}`);
     let buf = "";
     res.setEncoding("utf8");
     res.on("data", (chunk) => {
@@ -181,7 +182,6 @@ function openSessionStream(subsessionId, projectId, apiBase) {
         let obj;
         try { obj = JSON.parse(line); } catch { continue; }
 
-        // Consume event_received silently — used only for seq tracking
         if (obj.kind === "event_received") {
           if (typeof obj.sequence === "number") state.seq = obj.sequence;
           continue;
@@ -202,40 +202,28 @@ function openSessionStream(subsessionId, projectId, apiBase) {
         writeStdout(obj);
       }
     });
-    res.on("end", () => { activeSessions.delete(subsessionId); });
+    res.on("end", () => {});
     res.on("error", (err) => {
       writeStdout({ kind: "bridge_error", error: err.message, received_at: nowIso() });
-      activeSessions.delete(subsessionId);
     });
   });
 
   req.on("error", (err) => {
+    dbg(`bridge stream error: ${err.message}`);
     writeStdout({ kind: "bridge_error", error: err.message, received_at: nowIso() });
-    activeSessions.delete(subsessionId);
   });
 
+  req.flushHeaders();
   state.req = req;
   return state;
-}
-
-
-function handleBridgeOp(msg, projectId, apiBase) {
-  const { op, subsession_id: sid } = msg;
-
-  if (!sid) {
-    writeStdout({ kind: "bridge_error", error: `${op} requires subsession_id`, received_at: nowIso() });
-    return;
-  }
-
-  let state = activeSessions.get(sid);
-  if (!state) state = openSessionStream(sid, projectId, apiBase);
-  state.req.write(JSON.stringify(msg) + "\n");
 }
 
 function openResumeStream(sessionId, seq, projectId, apiBase) {
   const parts = urlParts(apiBase, `/session/resume/${encodeURIComponent(sessionId)}?after=${seq}`);
   const mod = pickModule(apiBase);
   const state = { req: null, sessionId, seq };
+
+  dbg(`POST ${apiBase}/session/resume/${encodeURIComponent(sessionId)}?after=${seq}`);
 
   const req = mod.request({
     ...parts,
@@ -247,6 +235,7 @@ function openResumeStream(sessionId, seq, projectId, apiBase) {
       "user-agent": userAgent(),
     },
   }, (res) => {
+    dbg(`resume stream response: HTTP ${res.statusCode}`);
     let buf = "";
     res.setEncoding("utf8");
     res.on("data", (chunk) => {
@@ -272,9 +261,11 @@ function openResumeStream(sessionId, seq, projectId, apiBase) {
   });
 
   req.on("error", (err) => {
+    dbg(`resume stream error: ${err.message}`);
     writeStdout({ kind: "bridge_error", error: err.message, received_at: nowIso() });
   });
 
+  req.flushHeaders();
   state.req = req;
   return state;
 }
@@ -298,12 +289,11 @@ async function cmdResume(args) {
     process.exit(1);
   }
 
-  let inputFile = null;
   let inputStream = process.stdin;
 
   if (tailTmp) {
     // Resume already knows the session_id — use it as the filename directly.
-    inputFile = path.join(process.env.TMPDIR || "/tmp", sessionId);
+    const inputFile = path.join(process.env.TMPDIR || "/tmp", sessionId);
     fs.writeFileSync(inputFile, "", { flag: "a" });
     inputStream = createFileTailStream(inputFile);
   }
@@ -333,8 +323,15 @@ async function cmdResume(args) {
 
 async function cmdBridge(args) {
   let tailTmp = false;
-  for (const arg of args) {
+  let subsessionId = null;
+  let elaboration = null;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === "--tailtmp") tailTmp = true;
+    else if (arg === "--subsession-id") subsessionId = args[++i];
+    else if (arg.startsWith("--subsession-id=")) subsessionId = arg.slice("--subsession-id=".length);
+    else if (arg === "--elaboration") elaboration = args[++i];
+    else if (arg.startsWith("--elaboration=")) elaboration = arg.slice("--elaboration=".length);
     else throw userError(`Unknown argument: ${arg}`);
   }
 
@@ -346,19 +343,24 @@ async function cmdBridge(args) {
     process.exit(1);
   }
 
-  let inputFile = null;
   let inputStream = process.stdin;
 
   if (tailTmp) {
     const inputName = `bridge_${randomBytes(6).toString("hex")}`;
-    inputFile = path.join(process.env.TMPDIR || "/tmp", inputName);
+    const inputFile = path.join(process.env.TMPDIR || "/tmp", inputName);
     fs.writeFileSync(inputFile, "", { flag: "a+" });
     _tailtmpInputFile = inputFile;
     inputStream = createFileTailStream(inputFile);
+  } else {
+    writeStdout({ kind: "bridge_started", api_base: apiBase, project_id: projectId, received_at: nowIso() });
   }
 
-  if (!tailTmp) {
-    writeStdout({ kind: "bridge_started", api_base: apiBase, project_id: projectId, received_at: nowIso() });
+  const session = openBridgeStream(projectId, apiBase);
+
+  if (subsessionId && elaboration) {
+    const elab = JSON.stringify({ op: "elaborating", subsession_id: subsessionId, text: elaboration });
+    dbg(`sending initial elaboration: ${elab}`);
+    session.req.write(elab + "\n");
   }
 
   const rl = readline.createInterface({ input: inputStream, terminal: false });
@@ -371,13 +373,11 @@ async function cmdBridge(args) {
       writeStdout({ kind: "bridge_error", error: "invalid JSON", line, received_at: nowIso() });
       return;
     }
-    handleBridgeOp(msg, projectId, apiBase);
+    session.req.write(JSON.stringify(msg) + "\n");
   });
 
   rl.on("close", () => {
-    for (const [, state] of activeSessions) {
-      try { state.req.end(); } catch { /* ignore */ }
-    }
+    try { session.req.end(); } catch { /* ignore */ }
     if (inputStream !== process.stdin) inputStream.destroy();
   });
 }
@@ -686,7 +686,7 @@ async function cmdOutcome(sessionId, outcome) {
 function usage(code = 0) {
   const msg = [
     "Usage:",
-    "  directionally bridge [--tailtmp]",
+    "  directionally bridge [--tailtmp] [--subsession-id <id>] [--elaboration <text>]",
     "  directionally resume <session_id> [seq] [--tailtmp]",
     "  directionally append <name> <ndjson>",
     "  directionally recall \"<problem statement>\"",
