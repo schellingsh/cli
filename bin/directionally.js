@@ -9,6 +9,7 @@ const readline = require("node:readline");
 const http = require("node:http");
 const https = require("node:https");
 const { execFileSync } = require("node:child_process");
+const { randomBytes } = require("node:crypto");
 
 // ---- version / constants ----------------------------------------------------
 
@@ -146,6 +147,10 @@ function createFileTailStream(filePath) {
 // subsession_id -> { req, sessionId, seq }
 const activeSessions = new Map();
 
+// Set by cmdBridge when --tailtmp is active so openSessionStream can symlink
+// the session_id back to the input file once the backend assigns one.
+let _tailtmpInputFile = null;
+
 function openSessionStream(subsessionId, projectId, apiBase) {
   writeStdout({ kind: "subsession_create", subsession_id: subsessionId, received_at: nowIso() });
 
@@ -184,6 +189,14 @@ function openSessionStream(subsessionId, projectId, apiBase) {
 
         if (obj.kind === "session_started") {
           state.sessionId = obj.session_id;
+          if (_tailtmpInputFile && obj.session_id) {
+            const linkPath = path.join(path.dirname(_tailtmpInputFile), obj.session_id);
+            try {
+              if (fs.existsSync(linkPath)) fs.unlinkSync(linkPath);
+              fs.symlinkSync(_tailtmpInputFile, linkPath);
+            } catch { /* non-fatal */ }
+            writeStdout({ kind: "bridge_started", api_base: apiBase, project_id: projectId, session_id: obj.session_id, received_at: nowIso() });
+          }
         }
 
         writeStdout(obj);
@@ -289,14 +302,14 @@ async function cmdResume(args) {
   let inputStream = process.stdin;
 
   if (tailTmp) {
-    inputFile = path.join(process.env.TMPDIR || "/tmp", "bridge_in");
+    // Resume already knows the session_id — use it as the filename directly.
+    inputFile = path.join(process.env.TMPDIR || "/tmp", sessionId);
     fs.writeFileSync(inputFile, "", { flag: "a" });
     inputStream = createFileTailStream(inputFile);
   }
 
   const state = openResumeStream(sessionId, seq, projectId, apiBase);
   const startedMsg = { kind: "bridge_started", api_base: apiBase, project_id: projectId, session_id: sessionId, received_at: nowIso() };
-  if (inputFile) startedMsg.input_file = inputFile;
   writeStdout(startedMsg);
 
   const rl = readline.createInterface({ input: inputStream, terminal: false });
@@ -337,14 +350,16 @@ async function cmdBridge(args) {
   let inputStream = process.stdin;
 
   if (tailTmp) {
-    inputFile = path.join(process.env.TMPDIR || "/tmp", "bridge_in");
-    fs.writeFileSync(inputFile, "", { flag: "a" });
+    const inputName = `bridge_${randomBytes(6).toString("hex")}`;
+    inputFile = path.join(process.env.TMPDIR || "/tmp", inputName);
+    fs.writeFileSync(inputFile, "", { flag: "a+" });
+    _tailtmpInputFile = inputFile;
     inputStream = createFileTailStream(inputFile);
   }
 
-  const startedMsg = { kind: "bridge_started", api_base: apiBase, project_id: projectId, received_at: nowIso() };
-  if (inputFile) startedMsg.input_file = inputFile;
-  writeStdout(startedMsg);
+  if (!tailTmp) {
+    writeStdout({ kind: "bridge_started", api_base: apiBase, project_id: projectId, received_at: nowIso() });
+  }
 
   const rl = readline.createInterface({ input: inputStream, terminal: false });
 
@@ -470,6 +485,202 @@ function cmdAppend(args) {
   fs.appendFileSync(filePath, ndjson.trim() + "\n");
 }
 
+// ---- SSE helpers (used by recall) ------------------------------------------
+
+function parseSseEventBlock(block) {
+  const lines = block.split(/\r?\n/);
+  let event = "message";
+  const dataLines = [];
+  for (const line of lines) {
+    if (!line || line.startsWith(":")) continue;
+    const idx = line.indexOf(":");
+    const field = idx === -1 ? line : line.slice(0, idx);
+    let value = idx === -1 ? "" : line.slice(idx + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "event") event = value || "message";
+    if (field === "data") dataLines.push(value);
+  }
+  return { event, data: dataLines.join("\n") };
+}
+
+async function* sseEventsFromResponse(res) {
+  if (!res.body) throw new Error("Response has no body stream.");
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sepIdx;
+    while ((sepIdx = buffer.indexOf("\n\n")) !== -1) {
+      const raw = buffer.slice(0, sepIdx).replace(/\r/g, "").trim();
+      buffer = buffer.slice(sepIdx + 2);
+      if (raw) yield parseSseEventBlock(raw);
+    }
+  }
+  const final = buffer.replace(/\r/g, "").trim();
+  if (final) yield parseSseEventBlock(final);
+}
+
+function sessionIdFromStarted(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  const sid = obj.session_id ?? obj.sessionId ?? obj.id ?? null;
+  return typeof sid === "string" && sid.trim() ? sid.trim() : null;
+}
+
+function orderedUniqueCids(cids) {
+  const seen = new Set();
+  const out = [];
+  for (const c of cids) {
+    const cid = typeof c === "string" ? c.trim() : "";
+    if (cid && !seen.has(cid)) { seen.add(cid); out.push(cid); }
+  }
+  return out;
+}
+
+async function apiFetchRecord(apiBase, cid, projectId) {
+  const url = new URL(`${apiBase}/fetch/${encodeURIComponent(cid)}`);
+  if (projectId) url.searchParams.set("project_id", projectId);
+  const res = await fetch(url, {
+    headers: { "accept": "application/json", "user-agent": userAgent() },
+  });
+  const text = await res.text();
+  if (!res.ok) return { cid, fetch_error: `HTTP ${res.status} ${res.statusText}${text ? `: ${text.slice(0, 500)}` : ""}` };
+  let record;
+  try { record = JSON.parse(text); } catch { record = { raw: text }; }
+  return { cid, record };
+}
+
+async function postFeedback(apiBase, body) {
+  const res = await fetch(`${apiBase}/feedback`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "accept": "application/json", "user-agent": userAgent() },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}${text ? `\n${text}` : ""}`);
+  try { return JSON.parse(text); } catch { return { raw: text }; }
+}
+
+// ---- recall / follow_up / fetch / feedback / impact_note / outcome ----------
+
+async function cmdRecall(problem) {
+  const apiBase = getApiBase();
+  const projectId = getProjectId(process.cwd());
+  const body = { problems: [problem] };
+  if (projectId) body.project_id = projectId;
+
+  const res = await fetch(`${apiBase}/post_many`, {
+    method: "POST",
+    headers: { "accept": "text/event-stream", "content-type": "application/json", "user-agent": userAgent() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status} ${res.statusText}${text ? `\n${text}` : ""}`);
+  }
+
+  let sessionStarted = null, postEvent = null, sessionTimeout = null;
+  const responses = [];
+  for await (const ev of sseEventsFromResponse(res)) {
+    if (ev.event === "session_started") { try { sessionStarted = JSON.parse(ev.data); } catch { /* ignore */ } }
+    else if (ev.event === "post") { try { postEvent = JSON.parse(ev.data); } catch { /* ignore */ } }
+    else if (ev.event === "response") { try { responses.push(JSON.parse(ev.data)); } catch { responses.push({ raw: ev.data }); } }
+    else if (ev.event === "session_timeout") { try { sessionTimeout = JSON.parse(ev.data); } catch { sessionTimeout = { raw: ev.data }; } }
+  }
+
+  if (!postEvent || !Array.isArray(postEvent.items) || !postEvent.items.length) {
+    throw new Error("Did not receive expected `post` event with `items[]`.");
+  }
+  const item = postEvent.items[0] || {};
+  const matched_cids = orderedUniqueCids(
+    responses.flatMap((r) => (Array.isArray(r.cids) ? r.cids : []))
+  );
+  const fetched_contents = matched_cids.length
+    ? await Promise.all(matched_cids.map((cid) => apiFetchRecord(apiBase, cid, projectId)))
+    : [];
+
+  return {
+    kind: "recall",
+    session_id: sessionIdFromStarted(sessionStarted),
+    project_id: projectId,
+    cid: item.cid || null,
+    matched_cids,
+    fetched_contents,
+    session_started: sessionStarted,
+    responses,
+    session_timeout: sessionTimeout,
+  };
+}
+
+async function cmdFollowUp(cid, learning) {
+  const apiBase = getApiBase();
+  const projectId = getProjectId(process.cwd());
+  const url = new URL(`${apiBase}/follow_up/${encodeURIComponent(cid)}`);
+  if (projectId) url.searchParams.set("project_id", projectId);
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", "accept": "application/json", "user-agent": userAgent() },
+    body: JSON.stringify({ residue: learning }),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}${text ? `\n${text}` : ""}`);
+  let data; try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  return { kind: "follow_up", project_id: projectId, cid, learning, response: data };
+}
+
+async function cmdFetch(cid) {
+  const apiBase = getApiBase();
+  const projectId = getProjectId(process.cwd());
+  const got = await apiFetchRecord(apiBase, cid, projectId);
+  if (got.fetch_error) throw new Error(got.fetch_error);
+  return { kind: "fetch", project_id: projectId, cid: got.cid, record: got.record };
+}
+
+async function cmdFeedback(sessionId, matchedCid, rating, reason) {
+  const apiBase = getApiBase();
+  const projectId = getProjectId(process.cwd());
+  const sid = (sessionId || "").trim();
+  const mc = (matchedCid || "").trim();
+  if (!sid) throw userError("session_id must be a non-empty string.");
+  if (!mc) throw userError("matched_cid must be a non-empty string.");
+  const ratingNum = Number(rating);
+  if (!Number.isInteger(ratingNum) || ratingNum < 0 || ratingNum > 10)
+    throw userError(`Rating must be an integer 0–10, got: ${rating}`);
+  const body = { subject: { type: "session", id: sid }, kind: "match_rating", payload: { rating: ratingNum, match_cid: mc, reason } };
+  if (projectId) body.project_id = projectId;
+  const data = await postFeedback(apiBase, body);
+  return { kind: "feedback", project_id: projectId, session_id: sid, matched_cid: mc, rating: ratingNum, reason, response: data };
+}
+
+async function cmdImpactNote(sessionId, note) {
+  const apiBase = getApiBase();
+  const projectId = getProjectId(process.cwd());
+  const sid = (sessionId || "").trim();
+  const text = (note || "").trim();
+  if (!sid) throw userError("session_id must be a non-empty string.");
+  if (!text) throw userError("Impact note must be a non-empty string.");
+  const body = { subject: { type: "session", id: sid }, kind: "impact_note", payload: { text } };
+  if (projectId) body.project_id = projectId;
+  const data = await postFeedback(apiBase, body);
+  return { kind: "impact_note", project_id: projectId, session_id: sid, note: text, response: data };
+}
+
+async function cmdOutcome(sessionId, outcome) {
+  const apiBase = getApiBase();
+  const projectId = getProjectId(process.cwd());
+  const sid = (sessionId || "").trim();
+  const value = (outcome || "").trim();
+  if (!sid) throw userError("session_id must be a non-empty string.");
+  if (!OUTCOME_VALUES.has(value))
+    throw userError(`Outcome must be one of: ${[...OUTCOME_VALUES].join(", ")}. Got: ${value}`);
+  const body = { subject: { type: "session", id: sid }, kind: "session_outcome", payload: { outcome: value } };
+  if (projectId) body.project_id = projectId;
+  const data = await postFeedback(apiBase, body);
+  return { kind: "outcome", project_id: projectId, session_id: sid, outcome: value, response: data };
+}
+
 // ---- usage ------------------------------------------------------------------
 
 function usage(code = 0) {
@@ -478,6 +689,12 @@ function usage(code = 0) {
     "  directionally bridge [--tailtmp]",
     "  directionally resume <session_id> [seq] [--tailtmp]",
     "  directionally append <name> <ndjson>",
+    "  directionally recall \"<problem statement>\"",
+    "  directionally follow_up <cid> \"<learning>\"",
+    "  directionally fetch <cid>",
+    "  directionally feedback <session_id> <matched_cid> <0..10> \"<reason>\"",
+    "  directionally impact_note <session_id> \"<note>\"",
+    "  directionally outcome <session_id> helped_direction|helped_implementation|irrelevant|missing_memory",
     "  directionally setup [--cwd <path>] [--force <owner/repo>]",
     "",
     "Env:",
@@ -498,6 +715,42 @@ async function main() {
     if (cmd === "bridge") { await cmdBridge(rest); return; }
     if (cmd === "resume") { await cmdResume(rest); return; }
     if (cmd === "append") { cmdAppend(rest); return; }
+    if (cmd === "recall") {
+      const problem = rest[0];
+      if (!problem) usage(1);
+      process.stdout.write(JSON.stringify(await cmdRecall(problem)) + "\n");
+      return;
+    }
+    if (cmd === "follow_up") {
+      const [cid, learning] = rest;
+      if (!cid || !learning) usage(1);
+      process.stdout.write(JSON.stringify(await cmdFollowUp(cid, learning)) + "\n");
+      return;
+    }
+    if (cmd === "fetch") {
+      const cid = rest[0];
+      if (!cid) usage(1);
+      process.stdout.write(JSON.stringify(await cmdFetch(cid)) + "\n");
+      return;
+    }
+    if (cmd === "feedback") {
+      const [sessionId, matchedCid, rating, reason] = rest;
+      if (!sessionId || !matchedCid || rating === undefined || !reason) usage(1);
+      process.stdout.write(JSON.stringify(await cmdFeedback(sessionId, matchedCid, rating, reason)) + "\n");
+      return;
+    }
+    if (cmd === "impact_note") {
+      const [sessionId, note] = rest;
+      if (!sessionId || !note) usage(1);
+      process.stdout.write(JSON.stringify(await cmdImpactNote(sessionId, note)) + "\n");
+      return;
+    }
+    if (cmd === "outcome") {
+      const [sessionId, outcome] = rest;
+      if (!sessionId || !outcome) usage(1);
+      process.stdout.write(JSON.stringify(await cmdOutcome(sessionId, outcome)) + "\n");
+      return;
+    }
     if (cmd === "setup") { await cmdSetup(rest); return; }
     usage(1);
   } catch (err) {
