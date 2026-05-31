@@ -26,7 +26,7 @@ const PROJECT_ID_RELATIVE = path.join(".schelling", "project-id");
 const SKILL_RELATIVE = path.join(".agents", "skills", "directionally", "SKILL.md");
 const SKILL_CLAUDE_RELATIVE = path.join(".claude", "skills", "directionally", "SKILL.md");
 const DEFAULT_SKILL_URL =
-  "https://raw.githubusercontent.com/schellingsh/skill/refs/heads/main/.agents/skills/directionally/SKILL.md";
+  "https://raw.githubusercontent.com/schellingsh/skill/refs/heads/experimental/streaming/.agents/skills/directionally/SKILL.md";
 
 const OUTCOME_VALUES = new Set([
   "helped_direction",
