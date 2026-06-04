@@ -272,6 +272,8 @@ function openFirstSession(projectId, apiBase, initialMessage) {
             sequence: state.sequence,
             received_at: nowIso(),
           });
+          res.destroy();
+          return;
         }
         writeNdjson(obj);
       }
