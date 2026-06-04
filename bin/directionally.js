@@ -5,7 +5,6 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const readline = require("node:readline");
 const http = require("node:http");
 const https = require("node:https");
 const { execFileSync } = require("node:child_process");
@@ -55,10 +54,13 @@ function writeNdjson(obj) {
 }
 
 function parseArgs(args) {
-  const flags = {};
+  const flags = { _: [] };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (!arg.startsWith("--")) throw userError(`Unexpected argument: ${arg}`);
+    if (!arg.startsWith("--")) {
+      flags._.push(arg);
+      continue;
+    }
     const eq = arg.indexOf("=");
     const key = (eq === -1 ? arg.slice(2) : arg.slice(2, eq)).replace(/-/g, "_");
     if (!key) throw userError(`Invalid flag: ${arg}`);
@@ -295,34 +297,41 @@ function openFirstSession(projectId, apiBase, initialMessage) {
 
   req.flushHeaders();
   if (initialMessage) req.write(JSON.stringify(initialMessage) + "\n");
+  req.end();
+}
 
-  const rl = readline.createInterface({ input: process.stdin, terminal: false });
-  rl.on("line", (line) => {
-    line = line.trim();
-    if (!line) return;
-    let msg;
-    try {
-      msg = JSON.parse(line);
-    } catch {
-      writeNdjson({ kind: "bridge_error", error: "invalid JSON", line, received_at: nowIso() });
-      return;
-    }
-    req.write(JSON.stringify(msg) + "\n");
-  });
-
-  rl.on("close", () => {
-    req.end();
-  });
-
-  if (process.stdin.isTTY) req.end();
+async function sendOps(sessionId, apiBase, ops) {
+  const url = new URL(`${apiBase}/session/resume/${encodeURIComponent(sessionId)}`);
+  const body = ops.map(op => JSON.stringify(op)).join("\n") + "\n";
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/x-ndjson", "user-agent": userAgent() },
+      body,
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch (err) {
+    process.stderr.write(`directionally: ops not sent: ${err.message}\n`);
+    return;
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    process.stderr.write(`directionally: ops not sent: HTTP ${res.status}${text ? ` ${text.slice(0, 200)}` : ""}\n`);
+    return;
+  }
+  await res.text().catch(() => {});
 }
 
 async function pollSession(projectId, apiBase, flags) {
   const sessionId = flags.session && flags.session !== true ? String(flags.session).trim() : "";
   if (!sessionId) throw userError("--session requires a session id.");
   const after = numberFlag(flags.after, 0, "--after");
-  const wait = numberFlag(flags.wait, 30, "--wait");
+  const wait = numberFlag(flags.wait, 0, "--wait");
   const limit = numberFlag(flags.limit, 100, "--limit");
+
+  const ops = flags._.map(arg => { try { return JSON.parse(arg); } catch { return null; } }).filter(Boolean);
+  if (ops.length) await sendOps(sessionId, apiBase, ops);
 
   const url = new URL(
     `${apiBase}/sessions/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}/events.ndjson`
@@ -333,17 +342,23 @@ async function pollSession(projectId, apiBase, flags) {
 
   const res = await fetch(url, {
     headers: { "accept": "application/x-ndjson", "user-agent": userAgent() },
+    signal: AbortSignal.timeout((wait + 10) * 1000),
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}${text ? `\n${text}` : ""}`);
-  if (text) process.stdout.write(text.endsWith("\n") ? text : text + "\n");
+  let count = 0;
+  if (text) {
+    process.stdout.write(text.endsWith("\n") ? text : text + "\n");
+    count = text.trim().split("\n").filter(Boolean).length;
+  }
+  writeNdjson({ kind: "polled", count, after, received_at: nowIso() });
 }
 
 function usage(code = 0) {
   const msg = [
     "Usage:",
     "  directionally --setup [--cwd <path>] [--force <owner/repo>]",
-    "  directionally --first --subsession-id <id> --elaboration <text>",
+    "  directionally --first --subsession-id <id> <text>",
     "  directionally --session <session_id> [--after <seq>] [--wait <secs>] [--limit <n>]",
     "",
     "Env:",
@@ -370,9 +385,9 @@ async function main() {
 
     if (flags.first) {
       const subsessionId = flags.subsession_id && flags.subsession_id !== true ? String(flags.subsession_id) : null;
-      const elaboration = flags.elaboration && flags.elaboration !== true ? String(flags.elaboration) : null;
-      const initialMessage = subsessionId && elaboration
-        ? { op: "elaborating", subsession_id: subsessionId, text: elaboration }
+      const text = flags._.length ? flags._.join(" ") : null;
+      const initialMessage = subsessionId && text
+        ? { op: "elaborating", subsession_id: subsessionId, text }
         : null;
       openFirstSession(projectId, apiBase, initialMessage);
       return;
