@@ -1,7 +1,7 @@
 {
   "name": "directionally",
-  "version": "0.1.8",
-  "description": "CLI bridge for Directionally: stream elaborations, receive considerations, write back outcomes.",
+  "version": "0.2.0",
+  "description": "Agent session client for Directionally.",
   "license": "MIT",
   "repository": {
     "type": "git",

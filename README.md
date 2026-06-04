@@ -1,148 +1,94 @@
-# schelling (CLI)
+# Directionally CLI
 
-Node CLI for `schelling.sh`, designed for agents and scripts.
-
-## Install / run
-
-Run without install (recommended for agents):
-
-```bash
-npx schelling@0.5.5 recall "Choosing a retry strategy for flaky third-party API calls"
-```
-
-Or install globally:
-
-```bash
-npm i -g schelling@0.5.5
-schelling recall "..."
-```
+Agent-oriented CLI for Directionally sessions.
 
 ## Quickstart
 
-1. Sign in at [schelling.sh](https://schelling.sh) with GitHub.
-2. Install the schelling GitHub App and grant access to your repository.
-3. From the root of that repository, run:
-
-   ```bash
-   npx schelling@0.5.5 setup
-   ```
-
-4. Open the repository in your coding agent. `setup` writes the same skill to `.agents/skills/schelling/SKILL.md` and `.claude/skills/schelling/SKILL.md`, and records the project's GitHub `owner/name` in `.schelling/project-id`; commit those paths so everyone on the repo gets the same retrieval setup.
-
-If you're working from an Obsidian vault or another repo that should point at a
-different Schelling project, set it explicitly:
+Install or refresh project-local skill files and `.schelling/project-id`:
 
 ```bash
-npx schelling@0.5.5 setup --force owner/repo
+npx directionally@0.2.0 --setup
 ```
 
-When `schelling` cannot find a git root, it also searches upward for an
-existing Schelling root by looking for `.schelling/project-id` or a directory
-that already has both `.agents/` and `.schelling/`.
-
-## Commands
-
-### recall
+Create the first session for an agent turn:
 
 ```bash
-schelling recall "<problem statement>"
+npx directionally@0.2.0 --first \
+  --subsession-id run_001 \
+  --elaboration "Initial read of the task."
 ```
 
-Posts one problem to the API and parses the SSE stream. Outputs **JSON** to stdout.
-
-### follow_up
+Poll later with the returned session id:
 
 ```bash
-schelling follow_up "<cid>" "<learning>"
+npx directionally@0.2.0 --session sess_abc123 --after 42 --wait 30
 ```
 
-Attaches residue to an existing CID. Outputs **JSON** to stdout.
+The default interface prints NDJSON to stdout. Agents should store the
+`session_id` from `bridge_started` and advance their cursor from event
+`sequence` values.
 
-### fetch
+## Default Interface
+
+### `--setup`
 
 ```bash
-schelling fetch "<cid>"
+directionally --setup [--cwd <path>] [--force <owner/repo>]
 ```
 
-Fetches an existing CID record from the API. Outputs **JSON** to stdout.
+Installs or refreshes:
 
-### feedback
+- `.agents/skills/directionally/SKILL.md`
+- `.claude/skills/directionally/SKILL.md`
+- `.schelling/project-id`
+
+By default, setup infers `owner/repo` from the GitHub remote. Use
+`--force owner/repo` to set it explicitly.
+
+### `--first`
 
 ```bash
-schelling feedback <session_id> <matched_cid> <0..10> "<textual feedback>"
+directionally --first [--subsession-id <id>] [--elaboration <text>]
 ```
 
-Creates an append-only retrospective via **`POST /feedback`** (same URL as
-**`impact_note`**, different **`kind`** / **`payload`**): **`kind`**
-**`match_rating`**, **`subject`** `{ "type": "session", "id": "<session_id>" }`,
-and **`payload`** `{ "rating": N, "match_cid": "<matched_cid>", "reason": "..." }`,
-plus optional **`project_id`** when `.schelling/project-id` exists. Outputs
-**JSON** to stdout (**`201 Created`** normally, with **`feedback_id`**, etc.).
+Opens `POST /sessions/{project_id}` and exits after the backend closes the
+request/response. When the
+backend assigns a session, the CLI emits:
 
-Distinct from **`impact_note`** (same session **`subject`**, but **`kind`
-`impact_note`** and **`payload.text`** only).
+```json
+{"kind":"bridge_started","session_id":"sess_...","sequence":0}
+```
 
+If `--subsession-id` and `--elaboration` are supplied, the CLI sends the initial
+elaboration immediately after opening the session.
 
-Example:
+The process also accepts immediate NDJSON on stdin and forwards each JSON line
+before closing the request. Use `--session` for later reads.
+
+### `--session`
 
 ```bash
-schelling feedback 4b612ae5-b5c5-49c3-92aa-6cb65020d170 bafybeig... 8 "Confirmed the rollback order we used."
+directionally --session <session_id> [--after <seq>] [--wait <secs>] [--limit <n>]
 ```
 
-### impact_note
+Polls the session event log through:
 
-```bash
-schelling impact_note <session_id> "<how Schelling helped the mission>"
+```text
+GET /sessions/{project_id}/{session_id}/events.ndjson
 ```
 
-Creates an append-only retrospective via **`POST /feedback`**: **`kind`**
-`impact_note`, **`subject`** `{ "type": "session", "id": "<session_id>" }`,
-**`payload`** `{ "text": "..." }`, and optional **`project_id`** when
-`.schelling/project-id` exists. Outputs **JSON** to stdout (**`201 Created`**
-normally, with **`feedback_id`**, **`subject`**, **`kind`**, **`payload`**).
+Options:
 
-When authoring from an agent, apply the **anti-generic** rules in
-**`.agents/skills/schelling/SKILL.md`**: a note must cite concrete matched or
-session artifact(s) and describe a **decision change**—generic gratitude alone
-is not a valid **`impact_note`**.
-
-Separate from **`follow_up`** (post CID residue) and from the **`feedback`**
-subcommand above (**`kind` `match_rating`**, with **`payload.match_cid`**). During **`post_many`**
-the API still accepts optional **`impact_notes`** alongside **`problems`** for
-upstream session intent (this minimal **`recall`** path does not expose that field yet).
-
-### outcome
-
-```bash
-schelling outcome <session_id> helped_direction|helped_implementation|irrelevant|missing_memory
-```
-
-Session-level categorical signal via **`POST /feedback`**, **`kind` `session_outcome`**,
-session **`subject`**, **`payload.outcome`** = one enum value. Intended to stand
-alone from optional **`impact_note`** text so under-helpful sessions remain
-measurable when agents skip narratives.
-
-### setup
-
-```bash
-schelling setup [--cwd <path>] [--force <owner/repo>]
-```
-
-Installs or refreshes `.agents/skills/schelling/SKILL.md`,
-`.claude/skills/schelling/SKILL.md` (same content), and `.schelling/project-id`
-at the detected project root.
-
-- By default, `setup` uses the current git root and infers `owner/repo` from a
-  GitHub remote.
-- `--force <owner/repo>` skips GitHub remote detection and writes the supplied
-  project id instead.
-- If no git root is available, `setup` searches upward for an existing
-  Schelling root before falling back to `--cwd`.
+- `--after` returns events with `sequence > after`. Default: `0`.
+- `--wait` long-polls for new events. Default: `30`.
+- `--limit` caps returned events. Default: `100`.
 
 ## Environment
 
-- `SCHELLING_API_BASE`: override API base URL (default `https://api.schelling.sh`)
+- `DIRECTIONALLY_API_BASE`: override API base URL. Default:
+  `https://api.directionally.ai`.
+- `DIRECTIONALLY_SKILL_URL`: override the `SKILL.md` source used by setup.
 
-## User-Agent
+## User Agent
 
-The CLI automatically sends `User-Agent: schelling/<version>`.
+The CLI sends `User-Agent: directionally/<version>`.
