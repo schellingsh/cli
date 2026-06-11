@@ -25,6 +25,10 @@ const SKILL_RELATIVE = path.join(".agents", "skills", "directionally", "SKILL.md
 const SKILL_CLAUDE_RELATIVE = path.join(".claude", "skills", "directionally", "SKILL.md");
 const DEFAULT_SKILL_URL =
   "https://raw.githubusercontent.com/schellingsh/skill/refs/heads/main/.agents/skills/directionally/SKILL.md";
+const SCRIPT_RELATIVE = path.join(".agents", "skills", "directionally", "scripts", "directionally.py");
+const SCRIPT_CLAUDE_RELATIVE = path.join(".claude", "skills", "directionally", "scripts", "directionally.py");
+const DEFAULT_SCRIPT_URL =
+  "https://raw.githubusercontent.com/schellingsh/skill/refs/heads/main/.agents/skills/directionally/scripts/directionally.py";
 
 function getApiBase() {
   return (process.env.DIRECTIONALLY_API_BASE || DEFAULT_API_BASE).replace(/\/+$/, "");
@@ -201,9 +205,12 @@ async function cmdSetup(flags) {
   }
 
   const skillBody = await downloadSkill(process.env.DIRECTIONALLY_SKILL_URL || DEFAULT_SKILL_URL);
+  const scriptBody = await downloadSkill(process.env.DIRECTIONALLY_SCRIPT_URL || DEFAULT_SCRIPT_URL);
   const files = [
     { ...writeIfChanged(path.join(targetRoot, SKILL_RELATIVE), skillBody), rel: SKILL_RELATIVE },
     { ...writeIfChanged(path.join(targetRoot, SKILL_CLAUDE_RELATIVE), skillBody), rel: SKILL_CLAUDE_RELATIVE },
+    { ...writeIfChanged(path.join(targetRoot, SCRIPT_RELATIVE), scriptBody), rel: SCRIPT_RELATIVE },
+    { ...writeIfChanged(path.join(targetRoot, SCRIPT_CLAUDE_RELATIVE), scriptBody), rel: SCRIPT_CLAUDE_RELATIVE },
     { ...writeIfChanged(path.join(targetRoot, PROJECT_ID_RELATIVE), `${projectId}\n`), rel: PROJECT_ID_RELATIVE },
   ];
 
@@ -366,6 +373,7 @@ function usage(code = 0) {
     "Env:",
     `  DIRECTIONALLY_API_BASE   Override API base URL (default: ${DEFAULT_API_BASE})`,
     "  DIRECTIONALLY_SKILL_URL  Override SKILL.md source URL used by --setup",
+    "  DIRECTIONALLY_SCRIPT_URL Override directionally.py source URL used by --setup",
   ].join("\n");
   (code === 0 ? console.log : console.error)(msg);
   process.exit(code);
